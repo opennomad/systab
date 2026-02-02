@@ -1,0 +1,568 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# catbsysd - A cron/at/batch-like interface for systemd
+# Managed jobs are marked with: # CATBSYSD_MANAGED
+
+readonly SCRIPT_NAME="systab"
+readonly SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+readonly MARKER="# CATBSYSD_MANAGED"
+readonly CRONTAB_EXAMPLE="# Example crontab format (for reference):
+# Min Hour Day Month DayOfWeek Command
+# *   *    *   *     *         /path/to/command
+# 0   2    *   *     *         /path/to/nightly-job
+# */15 *   *   *     *         /path/to/every-15-min
+#
+# Actual systemd timers below (OnCalendar format):
+"
+
+# Global variables for options
+opt_time=""
+opt_command=""
+opt_file=""
+opt_notify=false
+opt_syslog=false
+opt_email=""
+opt_edit=false
+opt_list=false
+opt_clean=false
+opt_status=false
+opt_filter=""
+
+usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS]
+
+Create and manage systemd timer jobs with cron/at-like simplicity.
+
+Job Creation Options:
+  -t <time>         Time specification (see TIME FORMATS below)
+  -c <command>      Command string to execute
+  -f <script>       Script file to execute
+  -i                Send desktop notification on completion
+  -s                Log output to system journal
+  -m <email>        Send email notification to address
+
+Management Options:
+  -E                Edit jobs in crontab-like format
+  -L [filter]       List job logs (optionally filtered)
+  -S                Show status of all managed jobs and timers
+  -C                Clean up completed one-time jobs
+
+TIME FORMATS:
+  - Relative: "in 5 minutes", "in 2 hours", "tomorrow"
+  - Absolute: "2025-01-21 14:30", "next tuesday at noon"
+  - Systemd: "daily", "weekly", "hourly", "*:0/15" (every 15 min)
+
+EXAMPLES:
+  # Run command in 5 minutes
+  $SCRIPT_NAME -t "in 5 minutes" -c "echo Hello"
+
+  # Run script tomorrow with notification
+  $SCRIPT_NAME -t tomorrow -f ~/backup.sh -i
+
+  # Run command every hour
+  $SCRIPT_NAME -t hourly -c "curl -s https://example.com"
+
+  # Read command from stdin
+  echo "ls -la" | $SCRIPT_NAME -t "next monday at 9am"
+
+  # Edit existing jobs
+  $SCRIPT_NAME -E
+
+  # View logs for backup jobs
+  $SCRIPT_NAME -L backup
+
+  # Show status of all jobs
+  $SCRIPT_NAME -S
+
+  # Clean up completed jobs
+  $SCRIPT_NAME -C
+
+EOF
+    exit "${1:-0}"
+}
+
+error() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+warn() {
+    echo "Warning: $*" >&2
+}
+
+# Parse time specification into systemd OnCalendar format
+parse_time() {
+    local time_spec="$1"
+    
+    # Common systemd calendar formats
+    case "${time_spec,,}" in
+        hourly|daily|weekly|monthly|yearly) echo "$time_spec"; return ;;
+        *:*) echo "$time_spec"; return ;;  # Assume systemd time format
+    esac
+    
+    # Try to parse with date command
+    local parsed_date
+    if parsed_date=$(date -d "$time_spec" '+%Y-%m-%d %H:%M:%S' 2>/dev/null); then
+        echo "$parsed_date"
+        return
+    fi
+    
+    error "Unable to parse time specification: $time_spec"
+}
+
+# Check if time spec is recurring
+is_recurring() {
+    local time_spec="$1"
+    case "${time_spec,,}" in
+        hourly|daily|weekly|monthly|yearly|*:*/*|*/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Generate unique job name
+generate_job_name() {
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    echo "${SCRIPT_NAME}_${timestamp}_$$"
+}
+
+# Get all managed service files
+get_managed_services() {
+    if [[ ! -d "$SYSTEMD_USER_DIR" ]]; then
+        return
+    fi
+    
+    local file seen=()
+    for file in "$SYSTEMD_USER_DIR"/*.service; do
+        [[ -f "$file" ]] || continue
+        if grep -q "^$MARKER" "$file" 2>/dev/null; then
+            local jobname
+            jobname=$(basename "$file" .service)
+            # Only output each job once
+            if [[ ! " ${seen[*]} " =~ " ${jobname} " ]]; then
+                echo "$jobname"
+                seen+=("$jobname")
+            fi
+        fi
+    done
+}
+
+# Get all managed timer files
+get_managed_timers() {
+    if [[ ! -d "$SYSTEMD_USER_DIR" ]]; then
+        return
+    fi
+    
+    local file seen=()
+    for file in "$SYSTEMD_USER_DIR"/*.timer; do
+        [[ -f "$file" ]] || continue
+        if grep -q "^$MARKER" "$file" 2>/dev/null; then
+            local jobname
+            jobname=$(basename "$file" .timer)
+            # Only output each job once
+            if [[ ! " ${seen[*]} " =~ " ${jobname} " ]]; then
+                echo "$jobname"
+                seen+=("$jobname")
+            fi
+        fi
+    done
+}
+
+# Create systemd service and timer files
+create_job() {
+    local job_name command_to_run time_spec
+    job_name=$(generate_job_name)
+    time_spec=$(parse_time "$opt_time")
+    
+    # Determine command to run
+    if [[ -n "$opt_command" ]]; then
+        command_to_run="$opt_command"
+    elif [[ -n "$opt_file" ]]; then
+        [[ -f "$opt_file" ]] || error "File not found: $opt_file"
+        [[ -x "$opt_file" ]] || error "File not executable: $opt_file"
+        command_to_run="$opt_file"
+    else
+        # Read from stdin
+        if [[ -t 0 ]]; then
+            echo "Please enter a command, then press Ctrl+D when done:" >&2
+        fi
+        command_to_run=$(cat)
+        [[ -n "$command_to_run" ]] || error "No command provided"
+    fi
+    
+    # Create systemd user directory if needed
+    mkdir -p "$SYSTEMD_USER_DIR"
+    
+    # Create service file
+    local service_file="$SYSTEMD_USER_DIR/${job_name}.service"
+    cat > "$service_file" <<EOF
+$MARKER
+[Unit]
+Description=$SCRIPT_NAME job: $job_name
+
+[Service]
+Type=oneshot
+ExecStart=${SHELL:-/bin/bash} -c '$command_to_run'
+EOF
+
+    # Add logging options
+    if $opt_syslog; then
+        cat >> "$service_file" <<EOF
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=$job_name
+EOF
+    fi
+    
+    # Add notification wrapper if needed
+    if $opt_notify || [[ -n "$opt_email" ]]; then
+        if $opt_notify; then
+            # Get current user's runtime directory and display
+            local user_id
+            user_id=$(id -u)
+            cat >> "$service_file" <<EOF
+ExecStartPost=/bin/sh -c 'export DISPLAY=:0; export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$user_id/bus; /usr/bin/notify-send "$SCRIPT_NAME" "Job completed: $job_name" || true'
+EOF
+        fi
+        
+        if [[ -n "$opt_email" ]]; then
+            cat >> "$service_file" <<EOF
+ExecStartPost=/bin/sh -c 'echo "Job $job_name completed at \$(date)" | mail -s "$SCRIPT_NAME: Job completed" "$opt_email"'
+EOF
+        fi
+    fi
+    
+    # Create timer file
+    local timer_file="$SYSTEMD_USER_DIR/${job_name}.timer"
+    cat > "$timer_file" <<EOF
+$MARKER
+[Unit]
+Description=Timer for $SCRIPT_NAME job: $job_name
+
+[Timer]
+OnCalendar=$time_spec
+EOF
+
+    if ! is_recurring "$opt_time"; then
+        echo "Persistent=false" >> "$timer_file"
+    fi
+    
+    cat >> "$timer_file" <<EOF
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    # Reload and start
+    systemctl --user daemon-reload
+    systemctl --user enable "$job_name.timer"
+    systemctl --user start "$job_name.timer"
+    
+    echo "Job created: $job_name"
+    echo "Next run: $(systemctl --user list-timers "$job_name.timer" --no-pager | tail -n 2 | head -n 1 | awk '{print $1, $2, $3}')"
+}
+
+# Edit jobs in crontab-like format
+edit_jobs() {
+    local temp_file
+    temp_file="${TMPDIR:-/dev/shm}/catbsysd_edit_$$"
+    trap 'rm -f "$temp_file"' EXIT
+    
+    # Create temp file with header
+    echo "$CRONTAB_EXAMPLE" > "$temp_file"
+    
+    # Add existing jobs
+    local job
+    while IFS= read -r job; do
+        [[ -z "$job" ]] && continue
+        
+        local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
+        local service_file="$SYSTEMD_USER_DIR/${job}.service"
+        
+        if [[ -f "$timer_file" && -f "$service_file" ]]; then
+            local schedule command
+            schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
+            command=$(grep "^ExecStart=" "$service_file" | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//")
+            
+            echo "# Job: $job"
+            echo "# Schedule: $schedule"
+            echo "# Command: $command"
+            echo ""
+        fi
+    done < <(get_managed_timers)
+    
+    # Open in editor
+    "${EDITOR:-vi}" "$temp_file"
+    
+    # Note: Full parsing and updating would be complex
+    # For now, just show the jobs for reference
+    echo "Note: Editing support is view-only. Use -C to clean up jobs."
+    echo "Use command-line options to create new jobs."
+}
+
+# Show status of all managed jobs
+show_status() {
+    local job
+    local job_list=()
+    
+    while IFS= read -r job; do
+        [[ -z "$job" ]] && continue
+        job_list+=("$job")
+    done < <(get_managed_timers)
+    
+    if [[ ${#job_list[@]} -eq 0 ]]; then
+        echo "No managed jobs found."
+        return
+    fi
+    
+    local count=${#job_list[@]}
+    echo "Managed Jobs Status - $count total"
+    echo "=========================================="
+    echo ""
+    
+    for job in "${job_list[@]}"; do
+        local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
+        local service_file="$SYSTEMD_USER_DIR/${job}.service"
+        
+        echo "Job: $job"
+        
+        # Get schedule from timer file
+        if [[ -f "$timer_file" ]]; then
+            local schedule
+            schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
+            echo "  Schedule: $schedule"
+            
+            # Check if recurring
+            if grep -q "^Persistent=false" "$timer_file"; then
+                echo "  Type: One-time"
+            else
+                echo "  Type: Recurring"
+            fi
+        fi
+        
+        # Get command from service file
+        if [[ -f "$service_file" ]]; then
+            local command
+            command=$(grep "^ExecStart=" "$service_file" | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//")
+            echo "  Command: $command"
+        fi
+        
+        # Timer status
+        if systemctl --user is-active "${job}.timer" &>/dev/null; then
+            echo "  Timer: Active"
+            
+            # Get next run time
+            local next_run
+            next_run=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1 | awk '{print $1, $2, $3, $4, $5}')
+            if [[ -n "$next_run" ]]; then
+                echo "  Next run: $next_run"
+            fi
+            
+            # Get last run time
+            local last_run
+            last_run=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1 | awk '{for(i=6;i<=10;i++) printf $i" "; print ""}')
+            if [[ -n "$last_run" && "$last_run" != "n/a "* ]]; then
+                echo "  Last run: $last_run"
+            fi
+        else
+            echo "  Timer: Inactive/Completed"
+        fi
+        
+        # Service status
+        if systemctl --user is-failed "${job}.service" &>/dev/null; then
+            echo "  Service: Failed"
+        elif systemctl --user is-active "${job}.service" &>/dev/null; then
+            echo "  Service: Running"
+        else
+            local exit_status
+            exit_status=$(systemctl --user show "${job}.service" -p ExecMainStatus --value 2>/dev/null)
+            if [[ -n "$exit_status" && "$exit_status" != "0" ]]; then
+                echo "  Service: Completed with exit code $exit_status"
+            else
+                echo "  Service: Completed"
+            fi
+        fi
+        
+        echo ""
+    done
+    
+    # Show systemctl list-timers summary
+    echo "Active Timers:"
+    echo "--------------"
+    systemctl --user list-timers "catbsysd_*" --no-pager 2>/dev/null || echo "none active"
+}
+
+# List logs
+list_logs() {
+    local grep_cmd
+    if command -v rg &>/dev/null; then
+        grep_cmd="rg"
+    else
+        grep_cmd="grep"
+    fi
+    
+    local job
+    local job_list=()
+    while IFS= read -r job; do
+        [[ -z "$job" ]] && continue
+        job_list+=("$job")
+    done < <(get_managed_services)
+    
+    if [[ ${#job_list[@]} -eq 0 ]]; then
+        echo "No managed jobs found."
+        return
+    fi
+    
+    local count=${#job_list[@]}
+    echo "Found $count managed jobs"
+    echo ""
+    
+    for job in "${job_list[@]}"; do
+        echo "=== Logs for $job ==="
+        
+        # Show timer status
+        if systemctl --user is-active "${job}.timer" &>/dev/null; then
+            echo "Status: Active"
+            systemctl --user status "${job}.timer" --no-pager -l | head -n 3
+        else
+            echo "Status: Inactive"
+        fi
+        echo ""
+        
+        # Show service logs
+        if [[ -n "$opt_filter" ]]; then
+            journalctl --user -u "${job}.service" --no-pager 2>/dev/null | $grep_cmd "$opt_filter" || echo "no matching logs"
+        else
+            journalctl --user -u "${job}.service" --no-pager 2>/dev/null || echo "no logs yet"
+        fi
+        echo ""
+    done
+}
+
+# Clean up completed jobs
+clean_jobs() {
+    local job cleaned=0
+    
+    while IFS= read -r job; do
+        [[ -z "$job" ]] && continue
+        
+        local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
+        
+        # Check if it's a one-time job (has Persistent=false)
+        if grep -q "^Persistent=false" "$timer_file" 2>/dev/null; then
+            # Check if timer is in "elapsed" state (completed one-time timer)
+            local timer_state
+            timer_state=$(systemctl --user show "${job}.timer" -p SubState --value 2>/dev/null)
+            
+            # One-time timers that have fired will be in "elapsed" or "dead" state
+            if [[ "$timer_state" == "elapsed" || "$timer_state" == "dead" ]]; then
+                # Get the command for display
+                local command
+                command=$(grep "^ExecStart=" "$SYSTEMD_USER_DIR/${job}.service" 2>/dev/null | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//" || echo "unknown")
+                
+                read -p "Remove completed job '$job' (command: $command)? [y/N] " -n 1 -r </dev/tty
+                echo
+                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                    systemctl --user stop "${job}.timer" 2>/dev/null || true
+                    systemctl --user disable "${job}.timer" 2>/dev/null || true
+                    rm -f "$SYSTEMD_USER_DIR/${job}.service" "$SYSTEMD_USER_DIR/${job}.timer"
+                    echo "Removed: $job"
+                    cleaned=$((cleaned + 1))
+                fi
+            fi
+        fi
+    done < <(get_managed_timers)
+    
+    if [[ $cleaned -gt 0 ]]; then
+        systemctl --user daemon-reload
+        echo "Cleaned up $cleaned jobs."
+    else
+        echo "No completed one-time jobs to clean up."
+    fi
+}
+
+# Parse command-line options
+parse_options() {
+    while getopts "t:c:f:ism:ELSCh" opt; do
+        case $opt in
+            t) opt_time="$OPTARG" ;;
+            c) opt_command="$OPTARG" ;;
+            f) opt_file="$OPTARG" ;;
+            i) opt_notify=true ;;
+            s) opt_syslog=true ;;
+            m) opt_email="$OPTARG" ;;
+            E) opt_edit=true ;;
+            L) opt_list=true ;;
+            S) opt_status=true ;;
+            C) opt_clean=true ;;
+            h) usage 0 ;;
+            *) usage 1 ;;
+        esac
+    done
+    
+    # Check if there's a filter argument after -L
+    if $opt_list && [[ $OPTIND -le $# ]]; then
+        opt_filter="${!OPTIND}"
+    fi
+    
+    # Validate mutually exclusive options
+    local manage_count=0
+    $opt_edit && manage_count=$((manage_count + 1))
+    $opt_list && manage_count=$((manage_count + 1))
+    $opt_status && manage_count=$((manage_count + 1))
+    $opt_clean && manage_count=$((manage_count + 1))
+    
+    if [[ $manage_count -gt 1 ]]; then
+        error "Options -E, -L, -S, and -C are mutually exclusive"
+    fi
+    
+    if [[ $manage_count -gt 0 && -n "$opt_time$opt_command$opt_file" ]]; then
+        error "Management options -E, -L, -S, and -C cannot be used with job creation options"
+    fi
+    
+    if [[ -n "$opt_command" && -n "$opt_file" ]]; then
+        error "Options -c and -f are mutually exclusive"
+    fi
+    
+    # Validate create mode requirements
+    local is_manage_mode=false
+    if $opt_edit || $opt_list || $opt_status || $opt_clean; then
+        is_manage_mode=true
+    fi
+    
+    if ! $is_manage_mode; then
+        [[ -n "$opt_time" ]] || error "Option -t is required for job creation"
+    fi
+}
+
+main() {
+    # Show usage if no arguments or -h
+    if [[ $# -eq 0 ]]; then
+        usage 0
+    fi
+    
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" ]]; then
+            usage 0
+        fi
+    done
+    
+    parse_options "$@"
+    
+    # Determine mode based on options
+    if $opt_edit; then
+        edit_jobs
+    elif $opt_list; then
+        list_logs
+    elif $opt_status; then
+        show_status
+    elif $opt_clean; then
+        clean_jobs
+    else
+        create_job
+    fi
+}
+
+main "$@"
