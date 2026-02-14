@@ -115,9 +115,10 @@ is_recurring() {
 
 # Generate unique job name
 generate_job_name() {
-    local timestamp
+    local timestamp rand
     timestamp=$(date +%Y%m%d_%H%M%S)
-    echo "${SCRIPT_NAME}_${timestamp}_$$"
+    rand=$(od -An -tx2 -N2 /dev/urandom | tr -d ' ')
+    echo "${SCRIPT_NAME}_${timestamp}_${rand}"
 }
 
 # Generate a random 6-char hex short ID
@@ -380,7 +381,8 @@ edit_jobs() {
     local temp_file orig_file
     temp_file="${TMPDIR:-/dev/shm}/systab_edit_$$"
     orig_file="${TMPDIR:-/dev/shm}/systab_orig_$$"
-    trap 'rm -f "$temp_file" "$orig_file"' EXIT
+    # shellcheck disable=SC2064
+    trap "rm -f '$temp_file' '$orig_file'" EXIT
 
     # Build crontab content
     {
@@ -424,8 +426,9 @@ HEADER
     fi
 
     # Parse files into associative arrays: id -> "schedule\tcmd"
+    # "new" lines are collected separately since there can be multiple
     declare -A orig_jobs edited_jobs
-    # Also track id order for original (to map id -> job_name)
+    declare -a new_jobs=()
     declare -A id_to_jobname
 
     # Build id -> jobname mapping from current managed timers
@@ -458,7 +461,11 @@ HEADER
         sched=$(printf '%s' "$line" | cut -f2)
         cmd=$(printf '%s' "$line" | cut -f3-)
         [[ -n "$id" && -n "$sched" ]] || continue
-        edited_jobs["$id"]="${sched}	${cmd}"
+        if [[ "$id" == "new" ]]; then
+            new_jobs+=("${sched}	${cmd}")
+        else
+            edited_jobs["$id"]="${sched}	${cmd}"
+        fi
     done < "$temp_file"
 
     local created=0 deleted=0 updated=0 needs_reload=false
@@ -476,28 +483,27 @@ HEADER
         fi
     done
 
-    # Creations: IDs in edited but not in original (must be "new")
+    # Creations: "new" lines from edited file
+    for entry in "${new_jobs[@]}"; do
+        local sched cmd
+        sched=$(printf '%s' "$entry" | cut -f1)
+        cmd=$(printf '%s' "$entry" | cut -f2-)
+        local result
+        result=$(create_job_from_edit "$sched" "$cmd")
+        echo "Created: $result"
+        created=$((created + 1))
+        needs_reload=true
+    done
+
+    # Handle unknown IDs (in edited but not in original and not "new")
     for id in "${!edited_jobs[@]}"; do
         if [[ -z "${orig_jobs[$id]+x}" ]]; then
-            if [[ "$id" != "new" ]]; then
-                warn "Ignoring unknown ID '$id' — use 'new' to create jobs"
-                continue
-            fi
-            local entry="${edited_jobs[$id]}"
-            local sched cmd
-            sched=$(printf '%s' "$entry" | cut -f1)
-            cmd=$(printf '%s' "$entry" | cut -f2-)
-            local result
-            result=$(create_job_from_edit "$sched" "$cmd")
-            echo "Created: $result"
-            created=$((created + 1))
-            needs_reload=true
+            warn "Ignoring unknown ID '$id' — use 'new' to create jobs"
         fi
     done
 
     # Updates: IDs in both but with changed values
     for id in "${!edited_jobs[@]}"; do
-        [[ "$id" == "new" ]] && continue
         if [[ -n "${orig_jobs[$id]+x}" && "${orig_jobs[$id]}" != "${edited_jobs[$id]}" ]]; then
             local jname="${id_to_jobname[$id]:-}"
             if [[ -z "$jname" ]]; then
