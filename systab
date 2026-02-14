@@ -283,8 +283,11 @@ ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then icon=dialog-i
 EOF
     fi
     if [[ -n "$email" ]]; then
+        local mailer
+        mailer=$(command -v sendmail || command -v msmtp || true)
+        [[ -n "$mailer" ]] || { warn "No sendmail or msmtp found, skipping email notification"; return; }
         cat >> "$file" <<EOF
-ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; printf "Subject: systab: $short_id %s\\n\\n%s at %s\\n" "\$s" "\$s" "\$(date)" | sendmail $email'
+ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; printf "Subject: systab: $short_id %s\\n\\n%s at %s\\n" "\$s" "\$s" "\$(date)" | $mailer $email'
 EOF
     fi
 }
