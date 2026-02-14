@@ -391,6 +391,13 @@ edit_jobs() {
 # Format: ID	SCHEDULE	COMMAND
 # Lines starting with # are ignored. Remove a line to delete a job.
 # Add a line with "new" as ID to create a job: new	daily	/path/to/cmd
+#
+# Schedule formats (systemd OnCalendar):
+#   hourly, daily, weekly, monthly, yearly
+#   *:0/15          every 15 minutes
+#   *-*-* 02:00:00  daily at 2am
+#   Mon *-*-* 09:00 every Monday at 9am
+#   *-*-01 00:00:00 first of every month
 HEADER
 
         local job
