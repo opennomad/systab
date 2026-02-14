@@ -21,6 +21,7 @@ opt_status=false
 opt_pause=""
 opt_resume=""
 opt_filter=""
+opt_output=""
 opt_jobid=""
 
 usage() {
@@ -35,6 +36,7 @@ Job Creation Options:
   -f <script>       Script file to execute
   -i                Send desktop notification on completion (success/failure)
   -m <email>        Send email notification to address (via sendmail)
+  -o <lines>        Include last N lines of job output in notifications (default: 10)
 
 Management Options:
   -P <id>           Pause (disable) a job
@@ -252,6 +254,10 @@ build_flags_string() {
     if $opt_notify; then
         flags="i"
     fi
+    if [[ -n "$opt_output" ]]; then
+        [[ -n "$flags" ]] && flags+=","
+        if [[ "$opt_output" == "10" ]]; then flags+="o"; else flags+="o=$opt_output"; fi
+    fi
     if [[ -n "$opt_email" ]]; then
         [[ -n "$flags" ]] && flags+=","
         flags+="e=$opt_email"
@@ -264,31 +270,51 @@ parse_flags() {
     local flags="$1"
     _notify_flag=false
     _email_addr=""
+    _output_lines=""
     IFS=',' read -ra parts <<< "$flags"
     for part in "${parts[@]}"; do
         case "$part" in
             i) _notify_flag=true ;;
+            o) _output_lines=10 ;;
+            o=*) _output_lines="${part#o=}" ;;
             e=*) _email_addr="${part#e=}" ;;
         esac
     done
 }
 
 # Write ExecStopPost notification lines to a service file
-# Usage: write_notify_lines <short_id> <notify_flag> <email_addr> <file>
+# Usage: write_notify_lines <short_id> <notify_flag> <email_addr> <file> [output_lines] [job_name]
 write_notify_lines() {
     local short_id="$1" notify="$2" email="$3" file="$4"
+    local output_lines="${5-}" job_name="${6-}"
+    local out_cmd=""
+    if [[ -n "$output_lines" && -n "$job_name" ]]; then
+        out_cmd="out=\$(journalctl --user SYSLOG_IDENTIFIER=$job_name -n $output_lines --no-pager -o cat); "
+    fi
     if [[ "$notify" == true ]]; then
-        cat >> "$file" <<EOF
+        if [[ -n "$out_cmd" ]]; then
+            cat >> "$file" <<EOF
+ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then icon=dialog-information; s=completed; else icon=dialog-error; s="failed (\$EXIT_STATUS)"; fi; ${out_cmd}body=\$(printf "Job $short_id: %%s\n%%s" "\$s" "\$out"); notify-send -i "\$icon" "systab" "\$body" || true'
+EOF
+        else
+            cat >> "$file" <<EOF
 ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then icon=dialog-information; s=completed; else icon=dialog-error; s="failed (\$EXIT_STATUS)"; fi; notify-send -i "\$icon" "systab" "Job $short_id: \$s" || true'
 EOF
+        fi
     fi
     if [[ -n "$email" ]]; then
         local mailer
         mailer=$(command -v sendmail || command -v msmtp || true)
         [[ -n "$mailer" ]] || { warn "No sendmail or msmtp found, skipping email notification"; return; }
-        cat >> "$file" <<EOF
-ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; printf "Subject: systab: $short_id %s\\n\\n%s at %s\\n" "\$s" "\$s" "\$(date)" | $mailer $email'
+        if [[ -n "$out_cmd" ]]; then
+            cat >> "$file" <<EOF
+ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; ${out_cmd}printf "Subject: systab: $short_id %%s\\n\\n%%s at %%s\\n\\n%%s\\n" "\$s" "\$s" "\$(date)" "\$out" | $mailer $email'
 EOF
+        else
+            cat >> "$file" <<EOF
+ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; printf "Subject: systab: $short_id %%s\\n\\n%%s at %%s\\n" "\$s" "\$s" "\$(date)" | $mailer $email'
+EOF
+        fi
     fi
 }
 
@@ -322,7 +348,7 @@ EOF
     if [[ -n "$flags" ]]; then
         echo "# SYSTAB_FLAGS=$flags" >> "$service_file"
         parse_flags "$flags"
-        write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$service_file"
+        write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$job_name"
     fi
 
     # Timer file
@@ -417,8 +443,11 @@ edit_jobs() {
 # Add a line with "new" as ID to create a job: new | daily | /path/to/cmd
 # Comment out a line to disable, uncomment to re-enable.
 #
-# Notification flags (append to ID with ':'): i = desktop, e=addr = email
+# Notification flags (append to ID with ':'): i = desktop, e=addr = email,
+#   o = include output (default 10 lines), o=N = include N lines of output
 #   a1b2c3:i | daily | cmd               desktop notification
+#   a1b2c3:i,o | daily | cmd             desktop with last 10 lines of output
+#   a1b2c3:i,o=5 | daily | cmd           desktop with last 5 lines of output
 #   a1b2c3:e=user@host | daily | cmd      email notification
 #   a1b2c3:i,e=user@host | daily | cmd    both
 #
@@ -711,7 +740,7 @@ HEADER
                 if [[ -n "$new_flags" ]]; then
                     echo "# SYSTAB_FLAGS=$new_flags" >> "$service_file"
                     parse_flags "$new_flags"
-                    write_notify_lines "$id" "$_notify_flag" "$_email_addr" "$service_file"
+                    write_notify_lines "$id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$jname"
                 fi
             fi
 
@@ -912,13 +941,14 @@ clean_jobs() {
 
 # Parse command-line options
 parse_options() {
-    while getopts "t:c:f:im:P:R:ELSCh" opt; do
+    while getopts "t:c:f:im:o:P:R:ELSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             c) opt_command="$OPTARG" ;;
             f) opt_file="$OPTARG" ;;
             i) opt_notify=true ;;
             m) opt_email="$OPTARG" ;;
+            o) opt_output="$OPTARG" ;;
             P) opt_pause="$OPTARG" ;;
             R) opt_resume="$OPTARG" ;;
             E) opt_edit=true ;;

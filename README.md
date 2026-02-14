@@ -73,6 +73,9 @@ systab -t "in 1 hour" -c "make build" -i
 
 # With email notification (via sendmail)
 systab -t "every day at 6am" -c "df -h" -m user@example.com
+
+# Include last 10 lines of output in notification
+systab -t "every day at 6am" -c "df -h" -i -o 10
 ```
 
 ### Managing jobs
@@ -121,7 +124,7 @@ g7h8i9:e=user@host | weekly | ~/backup.sh
 - Delete a line to remove a job
 - Add a line with `new` as the ID to create a job: `new | every 5 minutes | echo hello`
 - Comment out a line (`#`) to pause, uncomment to resume
-- Append notification flags after the ID with `:` — `i` for desktop, `e=addr` for email, comma-separated for both (e.g., `a1b2c3:i,e=user@host`)
+- Append notification flags after the ID with `:` — `i` for desktop, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:i,o,e=user@host`)
 
 ### Job IDs
 
@@ -142,6 +145,7 @@ Job Creation:
   -f <script>       Script file to execute (reads stdin if neither -c nor -f)
   -i                Send desktop notification on completion (success/failure)
   -m <email>        Send email notification to address (via sendmail)
+  -o <lines>        Include last N lines of job output in notifications (default: 10)
 
 Management:
   -P <id>           Pause (disable) a job
