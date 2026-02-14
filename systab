@@ -13,12 +13,13 @@ opt_time=""
 opt_command=""
 opt_file=""
 opt_notify=false
-opt_syslog=false
 opt_email=""
 opt_edit=false
 opt_list=false
 opt_clean=false
 opt_status=false
+opt_pause=""
+opt_resume=""
 opt_filter=""
 
 usage() {
@@ -32,35 +33,41 @@ Job Creation Options:
   -c <command>      Command string to execute
   -f <script>       Script file to execute
   -i                Send desktop notification on completion
-  -s                Log output to system journal
   -m <email>        Send email notification to address
 
 Management Options:
+  -P <id>           Pause (disable) a job
+  -R <id>           Resume (enable) a paused job
   -E                Edit jobs in crontab-like format
   -L [filter]       List job logs (optionally filtered)
   -S                Show status of all managed jobs and timers
   -C                Clean up completed one-time jobs
 
 TIME FORMATS:
-  - Relative: "in 5 minutes", "in 2 hours", "tomorrow"
-  - Absolute: "2025-01-21 14:30", "next tuesday at noon"
-  - Systemd: "daily", "weekly", "hourly", "*:0/15" (every 15 min)
+  Natural:   "every 5 minutes", "every day at 2am", "every monday at 9am"
+  Relative:  "in 5 minutes", "in 2 hours", "tomorrow"
+  Absolute:  "2025-01-21 14:30", "next tuesday at noon"
+  Systemd:   "daily", "weekly", "hourly", "*:0/15" (every 15 min)
 
 EXAMPLES:
-  # Run command in 5 minutes
+  # Run command every 5 minutes
+  $SCRIPT_NAME -t "every 5 minutes" -c "echo Hello"
+
+  # Run script every day at 2am with notification
+  $SCRIPT_NAME -t "every day at 2am" -f ~/backup.sh -i
+
+  # Run command in 5 minutes (one-time)
   $SCRIPT_NAME -t "in 5 minutes" -c "echo Hello"
-
-  # Run script tomorrow with notification
-  $SCRIPT_NAME -t tomorrow -f ~/backup.sh -i
-
-  # Run command every hour
-  $SCRIPT_NAME -t hourly -c "curl -s https://example.com"
 
   # Read command from stdin
   echo "ls -la" | $SCRIPT_NAME -t "next monday at 9am"
 
   # Edit existing jobs
   $SCRIPT_NAME -E
+
+  # Pause and resume a job
+  $SCRIPT_NAME -P <id>
+  $SCRIPT_NAME -R <id>
 
   # View logs for backup jobs
   $SCRIPT_NAME -L backup
@@ -87,28 +94,69 @@ warn() {
 # Parse time specification into systemd OnCalendar format
 parse_time() {
     local time_spec="$1"
-    
-    # Common systemd calendar formats
+
+    # Common systemd calendar formats (pass through)
     case "${time_spec,,}" in
         hourly|daily|weekly|monthly|yearly) echo "$time_spec"; return ;;
-        *:*) echo "$time_spec"; return ;;  # Assume systemd time format
+        *:*|*-*-*) echo "$time_spec"; return ;;  # Assume systemd time format
     esac
-    
-    # Try to parse with date command
+
+    # Natural language recurring patterns
+    local lower="${time_spec,,}"
+    if [[ "$lower" =~ ^every[[:space:]]+(.+) ]]; then
+        local rest="${BASH_REMATCH[1]}"
+        case "$rest" in
+            # "every N minutes/hours/seconds"
+            [0-9]*' minute'*) echo "*:0/${rest%% *}"; return ;;
+            [0-9]*' hour'*)   echo "0/${rest%% *}:00"; return ;;
+            [0-9]*' second'*) echo "*:*:0/${rest%% *}"; return ;;
+            # "every minute/hour"
+            'minute'*)          echo "*:*"; return ;;
+            'hour'*)            echo "hourly"; return ;;
+            # "every day at <time>"
+            'day at '*)
+                local at_time="${rest#day at }"
+                local parsed
+                if parsed=$(date -d "$at_time" '+%H:%M:%S' 2>/dev/null); then
+                    echo "*-*-* $parsed"; return
+                fi ;;
+            # "every <weekday> [at <time>]"
+            mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)
+                local day="${rest:0:3}"; day="${day^}"
+                echo "$day *-*-*"; return ;;
+            mon' at '*|monday' at '*|tue' at '*|tuesday' at '*|wed' at '*|wednesday' at '*|thu' at '*|thursday' at '*|fri' at '*|friday' at '*|sat' at '*|saturday' at '*|sun' at '*|sunday' at '*)
+                local day_part="${rest%% at *}" at_time="${rest#* at }"
+                local day="${day_part:0:3}"; day="${day^}"
+                local parsed
+                if parsed=$(date -d "$at_time" '+%H:%M:%S' 2>/dev/null); then
+                    echo "$day *-*-* $parsed"; return
+                fi ;;
+            # "every day/week/month/year"
+            'day'*)   echo "daily"; return ;;
+            'week'*)  echo "weekly"; return ;;
+            'month'*) echo "monthly"; return ;;
+            'year'*)  echo "yearly"; return ;;
+        esac
+    fi
+
+    # Try to parse with date command (one-time specs)
     local parsed_date
     if parsed_date=$(date -d "$time_spec" '+%Y-%m-%d %H:%M:%S' 2>/dev/null); then
         echo "$parsed_date"
         return
     fi
-    
+
     error "Unable to parse time specification: $time_spec"
 }
 
 # Check if time spec is recurring
+# One-time specs are absolute timestamps (from date -d): "2026-02-14 09:33:10"
+# Everything else (calendar specs with wildcards, keywords, intervals) is recurring
 is_recurring() {
     local time_spec="$1"
     case "${time_spec,,}" in
-        hourly|daily|weekly|monthly|yearly|*:*/*|*/*) return 0 ;;
+        hourly|daily|weekly|monthly|yearly) return 0 ;;
+        *'*'*|*/*) return 0 ;;  # Contains wildcard or interval
         *) return 1 ;;
     esac
 }
@@ -123,22 +171,70 @@ job_id() {
     echo "${1#"${SCRIPT_NAME}"_}"
 }
 
+# Check if a job's timer is enabled
+is_job_enabled() {
+    systemctl --user is-enabled "${1}.timer" &>/dev/null
+}
+
+# Disable a job (stop + disable timer)
+disable_job() {
+    systemctl --user stop "${1}.timer" 2>/dev/null || true
+    systemctl --user disable "${1}.timer" 2>/dev/null || true
+}
+
+# Enable a job (enable + start timer)
+enable_job() {
+    systemctl --user enable "${1}.timer" 2>/dev/null || true
+    systemctl --user start "${1}.timer" 2>/dev/null || true
+}
+
+# Validate a short ID refers to a managed job, sets _job_name
+validate_job_id() {
+    local id="$1"
+    _job_name="${SCRIPT_NAME}_${id}"
+    local timer_file="$SYSTEMD_USER_DIR/${_job_name}.timer"
+    [[ -f "$timer_file" ]] || error "No job found with ID: $id"
+    grep -q "^$MARKER" "$timer_file" 2>/dev/null || error "Not a managed job: $id"
+}
+
+# Pause a job by short ID
+pause_job() {
+    validate_job_id "$1"
+    if ! is_job_enabled "$_job_name"; then
+        echo "Already paused: $1"
+        return
+    fi
+    disable_job "$_job_name"
+    echo "Paused: $1"
+}
+
+# Resume a job by short ID
+resume_job() {
+    validate_job_id "$1"
+    if is_job_enabled "$_job_name"; then
+        echo "Already running: $1"
+        return
+    fi
+    enable_job "$_job_name"
+    echo "Resumed: $1"
+}
+
 # Get all managed service files
 get_managed_services() {
     if [[ ! -d "$SYSTEMD_USER_DIR" ]]; then
         return
     fi
     
-    local file seen=()
+    local file
+    local -A seen=()
     for file in "$SYSTEMD_USER_DIR"/*.service; do
         [[ -f "$file" ]] || continue
         if grep -q "^$MARKER" "$file" 2>/dev/null; then
             local jobname
             jobname=$(basename "$file" .service)
-            # Only output each job once
-            if [[ ! " ${seen[*]} " =~ " ${jobname} " ]]; then
+            if [[ -z "${seen[$jobname]+x}" ]]; then
                 echo "$jobname"
-                seen+=("$jobname")
+                seen["$jobname"]=1
             fi
         fi
     done
@@ -150,16 +246,16 @@ get_managed_timers() {
         return
     fi
     
-    local file seen=()
+    local file
+    local -A seen=()
     for file in "$SYSTEMD_USER_DIR"/*.timer; do
         [[ -f "$file" ]] || continue
         if grep -q "^$MARKER" "$file" 2>/dev/null; then
             local jobname
             jobname=$(basename "$file" .timer)
-            # Only output each job once
-            if [[ ! " ${seen[*]} " =~ " ${jobname} " ]]; then
+            if [[ -z "${seen[$jobname]+x}" ]]; then
                 echo "$jobname"
-                seen+=("$jobname")
+                seen["$jobname"]=1
             fi
         fi
     done
@@ -200,16 +296,10 @@ Description=$SCRIPT_NAME job: $job_name
 [Service]
 Type=oneshot
 ExecStart=${SHELL:-/bin/bash} -c '$command_to_run'
-EOF
-
-    # Add logging options
-    if $opt_syslog; then
-        cat >> "$service_file" <<EOF
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=$job_name
 EOF
-    fi
     
     # Add notification wrapper if needed
     if $opt_notify || [[ -n "$opt_email" ]]; then
@@ -272,7 +362,8 @@ remove_job() {
 
 # Create a job from edit mode (schedule + command, prints short ID)
 create_job_from_edit() {
-    local schedule="$1" command_to_run="$2"
+    local schedule command_to_run="$2"
+    schedule=$(parse_time "$1")
     local job_name
 
     job_name="${SCRIPT_NAME}_$(generate_id)"
@@ -288,6 +379,9 @@ Description=$SCRIPT_NAME job: $job_name
 [Service]
 Type=oneshot
 ExecStart=${SHELL:-/bin/bash} -c '$command_to_run'
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=$job_name
 EOF
 
     # Timer file
@@ -331,9 +425,10 @@ edit_jobs() {
     {
         cat <<'HEADER'
 # systab jobs — edit schedule/command, add/remove lines
-# Format: ID  SCHEDULE  COMMAND  (whitespace-separated)
-# Lines starting with # are ignored. Remove a line to delete a job.
-# Add a line with "new" as ID to create a job: new  daily  /path/to/cmd
+# Format: ID | SCHEDULE | COMMAND  (pipe-separated)
+# Remove a line to delete a job.
+# Add a line with "new" as ID to create a job: new | daily | /path/to/cmd
+# Comment out a line to disable, uncomment to re-enable.
 #
 # Schedule formats (systemd OnCalendar):
 #   hourly, daily, weekly, monthly, yearly
@@ -355,7 +450,11 @@ HEADER
                 id=$(job_id "$job")
                 schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
                 command=$(grep "^ExecStart=" "$service_file" | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//")
-                printf '%s\t%s\t%s\n' "$id" "$schedule" "$command"
+                if is_job_enabled "$job"; then
+                    printf '%s | %s | %s\n' "$id" "$schedule" "$command"
+                else
+                    printf '# %s | %s | %s\n' "$id" "$schedule" "$command"
+                fi
             fi
         done < <(get_managed_timers)
     } > "$temp_file"
@@ -377,45 +476,66 @@ HEADER
 
     # Parse files into associative arrays: id -> "schedule\tcmd"
     # "new" lines are collected separately since there can be multiple
-    declare -A orig_jobs edited_jobs
+    # commented_ids tracks disabled (commented-out) job lines
+    declare -A orig_jobs edited_jobs orig_commented edited_commented
     declare -a new_jobs=()
 
-    # Parse a crontab line into id, sched, cmd (split on first two whitespace runs)
+    # Parse a crontab line into id, sched, cmd (split on first two | delimiters)
     parse_crontab_line() {
         local line="$1"
         _parsed_id="" _parsed_sched="" _parsed_cmd=""
-        if [[ "$line" =~ ^([^[:space:]]+)[[:space:]]+([^[:space:]]+)[[:space:]]+(.*) ]]; then
-            _parsed_id="${BASH_REMATCH[1]}"
-            _parsed_sched="${BASH_REMATCH[2]}"
-            _parsed_cmd="${BASH_REMATCH[3]}"
+        if [[ "$line" == *"|"* ]]; then
+            _parsed_id="${line%%|*}"
+            local rest="${line#*|}"
+            _parsed_sched="${rest%%|*}"
+            _parsed_cmd="${rest#*|}"
+            # Trim leading/trailing whitespace
+            _parsed_id="${_parsed_id#"${_parsed_id%%[![:space:]]*}"}" _parsed_id="${_parsed_id%"${_parsed_id##*[![:space:]]}"}"
+            _parsed_sched="${_parsed_sched#"${_parsed_sched%%[![:space:]]*}"}" _parsed_sched="${_parsed_sched%"${_parsed_sched##*[![:space:]]}"}"
+            _parsed_cmd="${_parsed_cmd#"${_parsed_cmd%%[![:space:]]*}"}" _parsed_cmd="${_parsed_cmd%"${_parsed_cmd##*[![:space:]]}"}"
         fi
     }
 
-    # Parse original file
-    while IFS= read -r line; do
-        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-        parse_crontab_line "$line"
-        [[ -n "$_parsed_id" && -n "$_parsed_sched" ]] || continue
-        orig_jobs["$_parsed_id"]="${_parsed_sched}	${_parsed_cmd}"
-    done < "$orig_file"
+    # Parse a file, populating jobs and commented arrays
+    # Usage: parse_crontab_file <file> <jobs_var> <commented_var> [new_jobs_var]
+    parse_crontab_file() {
+        local file="$1" jobs_ref="$2" commented_ref="$3" new_ref="${4-}"
+        local line
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            # Check for commented job line: "# <id> <sched> <cmd>"
+            if [[ "$line" =~ ^#[[:space:]]+(.*) ]]; then
+                local uncommented="${BASH_REMATCH[1]}"
+                parse_crontab_line "$uncommented"
+                # Only treat as disabled job if ID looks like a hex short ID
+                if [[ -n "$_parsed_id" && -n "$_parsed_sched" && "$_parsed_id" =~ ^[0-9a-f]{6}$ ]]; then
+                    eval "${commented_ref}[\"\$_parsed_id\"]=\"\${_parsed_sched}|\${_parsed_cmd}\""
+                fi
+                continue
+            fi
+            parse_crontab_line "$line"
+            [[ -n "$_parsed_id" && -n "$_parsed_sched" ]] || continue
+            if [[ "$_parsed_id" == "new" && -n "$new_ref" ]]; then
+                eval "${new_ref}+=(\"\${_parsed_sched}|\${_parsed_cmd}\")"
+            else
+                eval "${jobs_ref}[\"\$_parsed_id\"]=\"\${_parsed_sched}|\${_parsed_cmd}\""
+            fi
+        done < "$file"
+    }
 
-    # Parse edited file
-    while IFS= read -r line; do
-        [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-        parse_crontab_line "$line"
-        [[ -n "$_parsed_id" && -n "$_parsed_sched" ]] || continue
-        if [[ "$_parsed_id" == "new" ]]; then
-            new_jobs+=("${_parsed_sched}	${_parsed_cmd}")
-        else
-            edited_jobs["$_parsed_id"]="${_parsed_sched}	${_parsed_cmd}"
-        fi
-    done < "$temp_file"
+    parse_crontab_file "$orig_file" orig_jobs orig_commented
+    parse_crontab_file "$temp_file" edited_jobs edited_commented new_jobs
 
-    local created=0 deleted=0 updated=0 needs_reload=false
+    # Collect all known IDs (from both active and commented in original)
+    declare -A all_orig_ids
+    for id in "${!orig_jobs[@]}"; do all_orig_ids["$id"]=1; done
+    for id in "${!orig_commented[@]}"; do all_orig_ids["$id"]=1; done
 
-    # Deletions: IDs in original but not in edited
-    for id in "${!orig_jobs[@]}"; do
-        if [[ -z "${edited_jobs[$id]+x}" ]]; then
+    local created=0 deleted=0 updated=0 enabled=0 disabled=0 needs_reload=false
+
+    # Deletions: IDs in original (active or commented) but absent from edited entirely
+    for id in "${!all_orig_ids[@]}"; do
+        if [[ -z "${edited_jobs[$id]+x}" && -z "${edited_commented[$id]+x}" ]]; then
             remove_job "${SCRIPT_NAME}_${id}"
             echo "Deleted: $id"
             deleted=$((deleted + 1))
@@ -426,8 +546,8 @@ HEADER
     # Creations: "new" lines from edited file
     for entry in "${new_jobs[@]}"; do
         local sched cmd
-        sched=$(printf '%s' "$entry" | cut -f1)
-        cmd=$(printf '%s' "$entry" | cut -f2-)
+        sched="${entry%%|*}"
+        cmd="${entry#*|}"
         local result
         result=$(create_job_from_edit "$sched" "$cmd")
         echo "Created: $result"
@@ -437,27 +557,65 @@ HEADER
 
     # Handle unknown IDs (in edited but not in original and not "new")
     for id in "${!edited_jobs[@]}"; do
-        if [[ -z "${orig_jobs[$id]+x}" ]]; then
+        if [[ -z "${all_orig_ids[$id]+x}" ]]; then
             warn "Ignoring unknown ID '$id' — use 'new' to create jobs"
         fi
     done
+    for id in "${!edited_commented[@]}"; do
+        if [[ -z "${all_orig_ids[$id]+x}" ]]; then
+            warn "Ignoring unknown commented ID '$id'"
+        fi
+    done
 
-    # Updates: IDs in both but with changed values
-    for id in "${!edited_jobs[@]}"; do
-        if [[ -n "${orig_jobs[$id]+x}" && "${orig_jobs[$id]}" != "${edited_jobs[$id]}" ]]; then
-            local jname="${SCRIPT_NAME}_${id}"
+    # Enable/disable transitions and updates
+    for id in "${!all_orig_ids[@]}"; do
+        local jname="${SCRIPT_NAME}_${id}"
+        local was_commented=false now_commented=false
+        [[ -n "${orig_commented[$id]+x}" ]] && was_commented=true
+        [[ -n "${edited_commented[$id]+x}" ]] && now_commented=true
 
-            local old_entry="${orig_jobs[$id]}" new_entry="${edited_jobs[$id]}"
+        # Skip if deleted
+        [[ -z "${edited_jobs[$id]+x}" && -z "${edited_commented[$id]+x}" ]] && continue
+
+        # Get old and new values
+        local old_entry="" new_entry=""
+        if $was_commented; then
+            old_entry="${orig_commented[$id]}"
+        elif [[ -n "${orig_jobs[$id]+x}" ]]; then
+            old_entry="${orig_jobs[$id]}"
+        fi
+        if $now_commented; then
+            new_entry="${edited_commented[$id]}"
+        elif [[ -n "${edited_jobs[$id]+x}" ]]; then
+            new_entry="${edited_jobs[$id]}"
+        fi
+
+        # Handle enable/disable transitions
+        if ! $was_commented && $now_commented; then
+            disable_job "$jname"
+            echo "Disabled: $id"
+            disabled=$((disabled + 1))
+            needs_reload=true
+        elif $was_commented && ! $now_commented; then
+            enable_job "$jname"
+            echo "Enabled: $id"
+            enabled=$((enabled + 1))
+            needs_reload=true
+        fi
+
+        # Handle schedule/command changes (whether active or commented)
+        if [[ "$old_entry" != "$new_entry" ]]; then
             local old_sched new_sched old_cmd new_cmd
-            old_sched=$(printf '%s' "$old_entry" | cut -f1)
-            new_sched=$(printf '%s' "$new_entry" | cut -f1)
-            old_cmd=$(printf '%s' "$old_entry" | cut -f2-)
-            new_cmd=$(printf '%s' "$new_entry" | cut -f2-)
+            old_sched="${old_entry%%|*}"
+            new_sched="${new_entry%%|*}"
+            old_cmd="${old_entry#*|}"
+            new_cmd="${new_entry#*|}"
 
             local timer_file="$SYSTEMD_USER_DIR/${jname}.timer"
             local service_file="$SYSTEMD_USER_DIR/${jname}.service"
 
             if [[ "$old_sched" != "$new_sched" && -f "$timer_file" ]]; then
+                new_sched=$(parse_time "$new_sched")
                 sed -i "s|^OnCalendar=.*|OnCalendar=$new_sched|" "$timer_file"
 
                 # Update one-time vs recurring settings
@@ -475,7 +633,11 @@ HEADER
                 sed -i "s|^ExecStart=.*|ExecStart=${SHELL:-/bin/bash} -c '$new_cmd'|" "$service_file"
             fi
 
-            systemctl --user restart "${jname}.timer" 2>/dev/null || true
+            # Only restart if the job is active (not being disabled)
+            if ! $now_commented; then
+                systemctl --user restart "${jname}.timer" 2>/dev/null || true
+            fi
+
             echo "Updated: $id"
             updated=$((updated + 1))
             needs_reload=true
@@ -487,7 +649,7 @@ HEADER
     fi
 
     echo ""
-    echo "Summary: $created created, $updated updated, $deleted deleted"
+    echo "Summary: $created created, $updated updated, $deleted deleted, $enabled enabled, $disabled disabled"
 }
 
 # Show status of all managed jobs
@@ -538,16 +700,18 @@ show_status() {
         fi
         
         # Timer status
-        if systemctl --user is-active "${job}.timer" &>/dev/null; then
+        if ! is_job_enabled "$job"; then
+            echo "  Timer: Disabled"
+        elif systemctl --user is-active "${job}.timer" &>/dev/null; then
             echo "  Timer: Active"
-            
+
             # Get next run time
             local next_run
             next_run=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1 | awk '{print $1, $2, $3, $4, $5}')
             if [[ -n "$next_run" ]]; then
                 echo "  Next run: $next_run"
             fi
-            
+
             # Get last run time
             local last_run
             last_run=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1 | awk '{for(i=6;i<=10;i++) printf $i" "; print ""}')
@@ -619,11 +783,11 @@ list_logs() {
         fi
         echo ""
         
-        # Show service logs
+        # Show service logs (unit messages + command output)
         if [[ -n "$opt_filter" ]]; then
-            journalctl --user -u "${job}.service" --no-pager 2>/dev/null | $grep_cmd "$opt_filter" || echo "no matching logs"
+            journalctl --user USER_UNIT="${job}.service" + SYSLOG_IDENTIFIER="$job" --no-pager 2>/dev/null | $grep_cmd "$opt_filter" || echo "no matching logs"
         else
-            journalctl --user -u "${job}.service" --no-pager 2>/dev/null || echo "no logs yet"
+            journalctl --user USER_UNIT="${job}.service" + SYSLOG_IDENTIFIER="$job" --no-pager 2>/dev/null || echo "no logs yet"
         fi
         echo ""
     done
@@ -673,14 +837,15 @@ clean_jobs() {
 
 # Parse command-line options
 parse_options() {
-    while getopts "t:c:f:ism:ELSCh" opt; do
+    while getopts "t:c:f:im:P:R:ELSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             c) opt_command="$OPTARG" ;;
             f) opt_file="$OPTARG" ;;
             i) opt_notify=true ;;
-            s) opt_syslog=true ;;
             m) opt_email="$OPTARG" ;;
+            P) opt_pause="$OPTARG" ;;
+            R) opt_resume="$OPTARG" ;;
             E) opt_edit=true ;;
             L) opt_list=true ;;
             S) opt_status=true ;;
@@ -697,17 +862,19 @@ parse_options() {
     
     # Validate mutually exclusive options
     local manage_count=0
+    [[ -n "$opt_pause" ]] && manage_count=$((manage_count + 1))
+    [[ -n "$opt_resume" ]] && manage_count=$((manage_count + 1))
     $opt_edit && manage_count=$((manage_count + 1))
     $opt_list && manage_count=$((manage_count + 1))
     $opt_status && manage_count=$((manage_count + 1))
     $opt_clean && manage_count=$((manage_count + 1))
-    
+
     if [[ $manage_count -gt 1 ]]; then
-        error "Options -E, -L, -S, and -C are mutually exclusive"
+        error "Options -P, -R, -E, -L, -S, and -C are mutually exclusive"
     fi
-    
+
     if [[ $manage_count -gt 0 && -n "$opt_time$opt_command$opt_file" ]]; then
-        error "Management options -E, -L, -S, and -C cannot be used with job creation options"
+        error "Management options -P, -R, -E, -L, -S, and -C cannot be used with job creation options"
     fi
     
     if [[ -n "$opt_command" && -n "$opt_file" ]]; then
@@ -716,7 +883,7 @@ parse_options() {
     
     # Validate create mode requirements
     local is_manage_mode=false
-    if $opt_edit || $opt_list || $opt_status || $opt_clean; then
+    if [[ -n "$opt_pause$opt_resume" ]] || $opt_edit || $opt_list || $opt_status || $opt_clean; then
         is_manage_mode=true
     fi
     
@@ -740,7 +907,11 @@ main() {
     parse_options "$@"
     
     # Determine mode based on options
-    if $opt_edit; then
+    if [[ -n "$opt_pause" ]]; then
+        pause_job "$opt_pause"
+    elif [[ -n "$opt_resume" ]]; then
+        resume_job "$opt_resume"
+    elif $opt_edit; then
         edit_jobs
     elif $opt_list; then
         list_logs
