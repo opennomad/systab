@@ -388,9 +388,9 @@ edit_jobs() {
     {
         cat <<'HEADER'
 # systab jobs — edit schedule/command, add/remove lines
-# Format: ID	SCHEDULE	COMMAND
+# Format: ID  SCHEDULE  COMMAND  (whitespace-separated)
 # Lines starting with # are ignored. Remove a line to delete a job.
-# Add a line with "new" as ID to create a job: new	daily	/path/to/cmd
+# Add a line with "new" as ID to create a job: new  daily  /path/to/cmd
 #
 # Schedule formats (systemd OnCalendar):
 #   hourly, daily, weekly, monthly, yearly
@@ -449,29 +449,34 @@ HEADER
         fi
     done < <(get_managed_timers)
 
+    # Parse a crontab line into id, sched, cmd (split on first two whitespace runs)
+    parse_crontab_line() {
+        local line="$1"
+        _parsed_id="" _parsed_sched="" _parsed_cmd=""
+        if [[ "$line" =~ ^([^[:space:]]+)[[:space:]]+([^[:space:]]+)[[:space:]]+(.*) ]]; then
+            _parsed_id="${BASH_REMATCH[1]}"
+            _parsed_sched="${BASH_REMATCH[2]}"
+            _parsed_cmd="${BASH_REMATCH[3]}"
+        fi
+    }
+
     # Parse original file
     while IFS= read -r line; do
         [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-        local id sched cmd
-        id=$(printf '%s' "$line" | cut -f1)
-        sched=$(printf '%s' "$line" | cut -f2)
-        cmd=$(printf '%s' "$line" | cut -f3-)
-        [[ -n "$id" && -n "$sched" ]] || continue
-        orig_jobs["$id"]="${sched}	${cmd}"
+        parse_crontab_line "$line"
+        [[ -n "$_parsed_id" && -n "$_parsed_sched" ]] || continue
+        orig_jobs["$_parsed_id"]="${_parsed_sched}	${_parsed_cmd}"
     done < "$orig_file"
 
     # Parse edited file
     while IFS= read -r line; do
         [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-        local id sched cmd
-        id=$(printf '%s' "$line" | cut -f1)
-        sched=$(printf '%s' "$line" | cut -f2)
-        cmd=$(printf '%s' "$line" | cut -f3-)
-        [[ -n "$id" && -n "$sched" ]] || continue
-        if [[ "$id" == "new" ]]; then
-            new_jobs+=("${sched}	${cmd}")
+        parse_crontab_line "$line"
+        [[ -n "$_parsed_id" && -n "$_parsed_sched" ]] || continue
+        if [[ "$_parsed_id" == "new" ]]; then
+            new_jobs+=("${_parsed_sched}	${_parsed_cmd}")
         else
-            edited_jobs["$id"]="${sched}	${cmd}"
+            edited_jobs["$_parsed_id"]="${_parsed_sched}	${_parsed_cmd}"
         fi
     done < "$temp_file"
 
