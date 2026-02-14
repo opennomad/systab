@@ -294,9 +294,12 @@ OnCalendar=$time_spec
 EOF
 
     if ! is_recurring "$opt_time"; then
-        echo "Persistent=false" >> "$timer_file"
+        cat >> "$timer_file" <<'ONETIME'
+Persistent=false
+RemainAfterElapse=no
+ONETIME
     fi
-    
+
     cat >> "$timer_file" <<EOF
 
 [Install]
@@ -354,7 +357,10 @@ OnCalendar=$schedule
 EOF
 
     if ! is_recurring "$schedule"; then
-        echo "Persistent=false" >> "$SYSTEMD_USER_DIR/${job_name}.timer"
+        cat >> "$SYSTEMD_USER_DIR/${job_name}.timer" <<'ONETIME'
+Persistent=false
+RemainAfterElapse=no
+ONETIME
     fi
 
     cat >> "$SYSTEMD_USER_DIR/${job_name}.timer" <<EOF
@@ -512,11 +518,14 @@ HEADER
             if [[ "$old_sched" != "$new_sched" && -f "$timer_file" ]]; then
                 sed -i "s|^OnCalendar=.*|OnCalendar=$new_sched|" "$timer_file"
 
-                # Update Persistent line based on new schedule
+                # Update one-time vs recurring settings
                 if is_recurring "$new_sched"; then
                     sed -i '/^Persistent=false$/d' "$timer_file"
-                elif ! grep -q "^Persistent=false" "$timer_file"; then
-                    sed -i "/^OnCalendar=/a Persistent=false" "$timer_file"
+                    sed -i '/^RemainAfterElapse=no$/d' "$timer_file"
+                else
+                    if ! grep -q "^Persistent=false" "$timer_file"; then
+                        sed -i "/^OnCalendar=/a Persistent=false\nRemainAfterElapse=no" "$timer_file"
+                    fi
                 fi
             fi
 
