@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`systab` is a single-file Bash script that provides a cron/at/batch-like interface for systemd user timers. It creates, manages, and cleans up systemd `.service` and `.timer` unit files in `~/.config/systemd/user/`. Managed units are tagged with a `# SYSTAB_MANAGED` marker comment and a `# SYSTAB_ID=<hex>` short ID for human-friendly identification.
+`systab` is a single-file Bash script that provides a cron/at/batch-like interface for systemd user timers. It creates, manages, and cleans up systemd `.service` and `.timer` unit files in `~/.config/systemd/user/`. Managed units are tagged with a `# SYSTAB_MANAGED` marker comment. Unit filenames use a 6-char hex ID (e.g., `systab_a1b2c3.timer`) which doubles as the human-facing job identifier.
 
 ## Running
 
@@ -26,7 +26,7 @@ The script has two modes controlled by CLI flags:
   - `-S`: Show timer status via `systemctl`, including short IDs.
   - `-C`: Interactively clean up elapsed one-time timers (removes unit files from disk).
 
-Key functions: `parse_time` (time spec → OnCalendar), `create_job` (generates unit files), `edit_jobs` (crontab-style edit with diff-and-apply), `get_managed_services`/`get_managed_timers` (find tagged units), `ensure_job_id` (auto-assign IDs to legacy jobs), `clean_jobs` (remove elapsed one-time timers).
+Key functions: `parse_time` (time spec → OnCalendar), `create_job` (generates unit files), `edit_jobs` (crontab-style edit with diff-and-apply), `get_managed_services`/`get_managed_timers` (find tagged units), `clean_jobs` (remove elapsed one-time timers).
 
 ## Testing
 

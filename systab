@@ -113,62 +113,14 @@ is_recurring() {
     esac
 }
 
-# Generate unique job name
-generate_job_name() {
-    local timestamp rand
-    timestamp=$(date +%Y%m%d_%H%M%S)
-    rand=$(od -An -tx2 -N2 /dev/urandom | tr -d ' ')
-    echo "${SCRIPT_NAME}_${timestamp}_${rand}"
-}
-
-# Generate a random 6-char hex short ID
-generate_short_id() {
+# Generate a random 6-char hex ID
+generate_id() {
     od -An -tx1 -N3 /dev/urandom | tr -d ' \n'
 }
 
-# Extract SYSTAB_ID from a job's timer file; empty if missing
-get_job_id() {
-    local job_name="$1"
-    local timer_file="$SYSTEMD_USER_DIR/${job_name}.timer"
-    if [[ -f "$timer_file" ]]; then
-        sed -n 's/^# SYSTAB_ID=//p' "$timer_file"
-    fi
-}
-
-# Find job name by short ID; empty if not found
-get_job_by_id() {
-    local target_id="$1"
-    local job
-    while IFS= read -r job; do
-        [[ -z "$job" ]] && continue
-        local jid
-        jid=$(get_job_id "$job")
-        if [[ "$jid" == "$target_id" ]]; then
-            echo "$job"
-            return
-        fi
-    done < <(get_managed_timers)
-}
-
-# Ensure a managed job has a SYSTAB_ID; assign one if missing
-ensure_job_id() {
-    local job_name="$1"
-    local existing_id
-    existing_id=$(get_job_id "$job_name")
-    if [[ -n "$existing_id" ]]; then
-        echo "$existing_id"
-        return
-    fi
-    local new_id
-    new_id=$(generate_short_id)
-    # Insert SYSTAB_ID line after the MARKER in both files
-    for ext in timer service; do
-        local unit_file="$SYSTEMD_USER_DIR/${job_name}.${ext}"
-        if [[ -f "$unit_file" ]]; then
-            sed -i "s/^$MARKER$/&\n# SYSTAB_ID=$new_id/" "$unit_file"
-        fi
-    done
-    echo "$new_id"
+# Extract short ID from job name (systab_<id> → <id>)
+job_id() {
+    echo "${1#"${SCRIPT_NAME}"_}"
 }
 
 # Get all managed service files
@@ -216,7 +168,7 @@ get_managed_timers() {
 # Create systemd service and timer files
 create_job() {
     local job_name command_to_run time_spec
-    job_name=$(generate_job_name)
+    job_name="${SCRIPT_NAME}_$(generate_id)"
     time_spec=$(parse_time "$opt_time")
     
     # Determine command to run
@@ -238,15 +190,10 @@ create_job() {
     # Create systemd user directory if needed
     mkdir -p "$SYSTEMD_USER_DIR"
 
-    # Generate short ID for human-friendly display
-    local short_id
-    short_id=$(generate_short_id)
-
     # Create service file
     local service_file="$SYSTEMD_USER_DIR/${job_name}.service"
     cat > "$service_file" <<EOF
 $MARKER
-# SYSTAB_ID=$short_id
 [Unit]
 Description=$SCRIPT_NAME job: $job_name
 
@@ -286,7 +233,6 @@ EOF
     local timer_file="$SYSTEMD_USER_DIR/${job_name}.timer"
     cat > "$timer_file" <<EOF
 $MARKER
-# SYSTAB_ID=$short_id
 [Unit]
 Description=Timer for $SCRIPT_NAME job: $job_name
 
@@ -312,7 +258,7 @@ EOF
     systemctl --user enable "$job_name.timer"
     systemctl --user start "$job_name.timer"
     
-    echo "Job created: $short_id ($job_name)"
+    echo "Job created: $(job_id "$job_name")"
     echo "Next run: $(systemctl --user list-timers "$job_name.timer" --no-pager | tail -n 2 | head -n 1 | awk '{print $1, $2, $3}')"
 }
 
@@ -324,20 +270,18 @@ remove_job() {
     rm -f "$SYSTEMD_USER_DIR/${job_name}.service" "$SYSTEMD_USER_DIR/${job_name}.timer"
 }
 
-# Create a job from edit mode (schedule + command, returns short ID)
+# Create a job from edit mode (schedule + command, prints short ID)
 create_job_from_edit() {
     local schedule="$1" command_to_run="$2"
-    local job_name short_id
+    local job_name
 
-    job_name=$(generate_job_name)
-    short_id=$(generate_short_id)
+    job_name="${SCRIPT_NAME}_$(generate_id)"
 
     mkdir -p "$SYSTEMD_USER_DIR"
 
     # Service file
     cat > "$SYSTEMD_USER_DIR/${job_name}.service" <<EOF
 $MARKER
-# SYSTAB_ID=$short_id
 [Unit]
 Description=$SCRIPT_NAME job: $job_name
 
@@ -349,7 +293,6 @@ EOF
     # Timer file
     cat > "$SYSTEMD_USER_DIR/${job_name}.timer" <<EOF
 $MARKER
-# SYSTAB_ID=$short_id
 [Unit]
 Description=Timer for $SCRIPT_NAME job: $job_name
 
@@ -373,7 +316,7 @@ EOF
     systemctl --user enable "$job_name.timer"
     systemctl --user start "$job_name.timer"
 
-    echo "$short_id ($job_name)"
+    job_id "$job_name"
 }
 
 # Edit jobs in crontab-like format
@@ -408,11 +351,11 @@ HEADER
             local service_file="$SYSTEMD_USER_DIR/${job}.service"
 
             if [[ -f "$timer_file" && -f "$service_file" ]]; then
-                local short_id schedule command
-                short_id=$(ensure_job_id "$job")
+                local id schedule command
+                id=$(job_id "$job")
                 schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
                 command=$(grep "^ExecStart=" "$service_file" | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//")
-                printf '%s\t%s\t%s\n' "$short_id" "$schedule" "$command"
+                printf '%s\t%s\t%s\n' "$id" "$schedule" "$command"
             fi
         done < <(get_managed_timers)
     } > "$temp_file"
@@ -436,18 +379,6 @@ HEADER
     # "new" lines are collected separately since there can be multiple
     declare -A orig_jobs edited_jobs
     declare -a new_jobs=()
-    declare -A id_to_jobname
-
-    # Build id -> jobname mapping from current managed timers
-    local job
-    while IFS= read -r job; do
-        [[ -z "$job" ]] && continue
-        local jid
-        jid=$(get_job_id "$job")
-        if [[ -n "$jid" ]]; then
-            id_to_jobname["$jid"]="$job"
-        fi
-    done < <(get_managed_timers)
 
     # Parse a crontab line into id, sched, cmd (split on first two whitespace runs)
     parse_crontab_line() {
@@ -485,13 +416,10 @@ HEADER
     # Deletions: IDs in original but not in edited
     for id in "${!orig_jobs[@]}"; do
         if [[ -z "${edited_jobs[$id]+x}" ]]; then
-            local jname="${id_to_jobname[$id]:-}"
-            if [[ -n "$jname" ]]; then
-                remove_job "$jname"
-                echo "Deleted: $id ($jname)"
-                deleted=$((deleted + 1))
-                needs_reload=true
-            fi
+            remove_job "${SCRIPT_NAME}_${id}"
+            echo "Deleted: $id"
+            deleted=$((deleted + 1))
+            needs_reload=true
         fi
     done
 
@@ -517,11 +445,7 @@ HEADER
     # Updates: IDs in both but with changed values
     for id in "${!edited_jobs[@]}"; do
         if [[ -n "${orig_jobs[$id]+x}" && "${orig_jobs[$id]}" != "${edited_jobs[$id]}" ]]; then
-            local jname="${id_to_jobname[$id]:-}"
-            if [[ -z "$jname" ]]; then
-                warn "Cannot find job for ID '$id', skipping update"
-                continue
-            fi
+            local jname="${SCRIPT_NAME}_${id}"
 
             local old_entry="${orig_jobs[$id]}" new_entry="${edited_jobs[$id]}"
             local old_sched new_sched old_cmd new_cmd
@@ -552,7 +476,7 @@ HEADER
             fi
 
             systemctl --user restart "${jname}.timer" 2>/dev/null || true
-            echo "Updated: $id ($jname)"
+            echo "Updated: $id"
             updated=$((updated + 1))
             needs_reload=true
         fi
@@ -590,13 +514,7 @@ show_status() {
         local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
         local service_file="$SYSTEMD_USER_DIR/${job}.service"
 
-        local short_id
-        short_id=$(get_job_id "$job")
-        if [[ -n "$short_id" ]]; then
-            echo "Job: $job (ID: $short_id)"
-        else
-            echo "Job: $job"
-        fi
+        echo "Job: $(job_id "$job")"
         
         # Get schedule from timer file
         if [[ -f "$timer_file" ]]; then
@@ -690,13 +608,7 @@ list_logs() {
     echo ""
     
     for job in "${job_list[@]}"; do
-        local short_id
-        short_id=$(get_job_id "$job")
-        if [[ -n "$short_id" ]]; then
-            echo "=== Logs for $job (ID: $short_id) ==="
-        else
-            echo "=== Logs for $job ==="
-        fi
+        echo "=== Logs for $(job_id "$job") ==="
         
         # Show timer status
         if systemctl --user is-active "${job}.timer" &>/dev/null; then
