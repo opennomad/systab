@@ -95,6 +95,11 @@ warn() {
     echo "Warning: $*" >&2
 }
 
+# Extract the command string from a service file's ExecStart line
+get_job_command() {
+    sed -n "s/^ExecStart=.*-c '\\(.*\\)'$/\\1/p" "$1"
+}
+
 # Trim leading and trailing whitespace, result in _trimmed
 trim() {
     _trimmed="$1"
@@ -230,45 +235,14 @@ resume_job() {
     echo "Resumed: $1"
 }
 
-# Get all managed service files
-get_managed_services() {
-    if [[ ! -d "$SYSTEMD_USER_DIR" ]]; then
-        return
-    fi
-    
+# Get all managed unit files of a given type (service or timer)
+get_managed_units() {
+    local ext="$1"
+    [[ -d "$SYSTEMD_USER_DIR" ]] || return
     local file
-    local -A seen=()
-    for file in "$SYSTEMD_USER_DIR"/*.service; do
+    for file in "$SYSTEMD_USER_DIR"/*."$ext"; do
         [[ -f "$file" ]] || continue
-        if grep -q "^$MARKER" "$file" 2>/dev/null; then
-            local jobname
-            jobname=$(basename "$file" .service)
-            if [[ -z "${seen[$jobname]+x}" ]]; then
-                echo "$jobname"
-                seen["$jobname"]=1
-            fi
-        fi
-    done
-}
-
-# Get all managed timer files
-get_managed_timers() {
-    if [[ ! -d "$SYSTEMD_USER_DIR" ]]; then
-        return
-    fi
-    
-    local file
-    local -A seen=()
-    for file in "$SYSTEMD_USER_DIR"/*.timer; do
-        [[ -f "$file" ]] || continue
-        if grep -q "^$MARKER" "$file" 2>/dev/null; then
-            local jobname
-            jobname=$(basename "$file" .timer)
-            if [[ -z "${seen[$jobname]+x}" ]]; then
-                echo "$jobname"
-                seen["$jobname"]=1
-            fi
-        fi
+        grep -q "^$MARKER" "$file" 2>/dev/null && basename "$file" ".$ext"
     done
 }
 
@@ -315,37 +289,19 @@ EOF
     fi
 }
 
-# Create systemd service and timer files
-create_job() {
-    local job_name command_to_run time_spec
-    job_name="${SCRIPT_NAME}_$(generate_id)"
-    time_spec=$(parse_time "$opt_time")
-    
-    # Determine command to run
-    if [[ -n "$opt_command" ]]; then
-        command_to_run="$opt_command"
-    elif [[ -n "$opt_file" ]]; then
-        [[ -f "$opt_file" ]] || error "File not found: $opt_file"
-        [[ -x "$opt_file" ]] || error "File not executable: $opt_file"
-        command_to_run="$opt_file"
-    else
-        # Read from stdin
-        if [[ -t 0 ]]; then
-            echo "Please enter a command, then press Ctrl+D when done:" >&2
-        fi
-        command_to_run=$(cat)
-        [[ -n "$command_to_run" ]] || error "No command provided"
-    fi
-    
-    # Create systemd user directory if needed
-    mkdir -p "$SYSTEMD_USER_DIR"
+# Write service + timer unit files, enable and start the timer
+# Usage: _write_unit_files <command> <schedule> [flags]
+# Sets _created_id to the short ID of the new job
+_write_unit_files() {
+    local command_to_run="$1" schedule="$2" flags="${3-}"
+    local job_name short_id
 
-    # Build flags
-    local flags short_id
-    flags=$(build_flags_string)
+    job_name="${SCRIPT_NAME}_$(generate_id)"
     short_id=$(job_id "$job_name")
 
-    # Create service file
+    mkdir -p "$SYSTEMD_USER_DIR"
+
+    # Service file
     local service_file="$SYSTEMD_USER_DIR/${job_name}.service"
     cat > "$service_file" <<EOF
 $MARKER
@@ -360,13 +316,13 @@ StandardError=journal
 SyslogIdentifier=$job_name
 EOF
 
-    # Add flags comment and notification lines
     if [[ -n "$flags" ]]; then
         echo "# SYSTAB_FLAGS=$flags" >> "$service_file"
-        write_notify_lines "$short_id" "$opt_notify" "$opt_email" "$service_file"
+        parse_flags "$flags"
+        write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$service_file"
     fi
-    
-    # Create timer file
+
+    # Timer file
     local timer_file="$SYSTEMD_USER_DIR/${job_name}.timer"
     cat > "$timer_file" <<EOF
 $MARKER
@@ -374,10 +330,10 @@ $MARKER
 Description=Timer for $SCRIPT_NAME job: $job_name
 
 [Timer]
-OnCalendar=$time_spec
+OnCalendar=$schedule
 EOF
 
-    if ! is_recurring "$opt_time"; then
+    if ! is_recurring "$schedule"; then
         cat >> "$timer_file" <<'ONETIME'
 Persistent=false
 RemainAfterElapse=no
@@ -390,12 +346,38 @@ ONETIME
 WantedBy=timers.target
 EOF
 
-    # Reload and start
-    systemctl --user daemon-reload
     systemctl --user enable "$job_name.timer"
     systemctl --user start "$job_name.timer"
-    
-    echo "Job created: $(job_id "$job_name")"
+
+    _created_id="$short_id"
+}
+
+# Create a job from CLI options
+create_job() {
+    local command_to_run
+
+    if [[ -n "$opt_command" ]]; then
+        command_to_run="$opt_command"
+    elif [[ -n "$opt_file" ]]; then
+        [[ -f "$opt_file" ]] || error "File not found: $opt_file"
+        [[ -x "$opt_file" ]] || error "File not executable: $opt_file"
+        command_to_run="$opt_file"
+    else
+        if [[ -t 0 ]]; then
+            echo "Please enter a command, then press Ctrl+D when done:" >&2
+        fi
+        command_to_run=$(cat)
+        [[ -n "$command_to_run" ]] || error "No command provided"
+    fi
+
+    local time_spec
+    time_spec=$(parse_time "$opt_time")
+
+    _write_unit_files "$command_to_run" "$time_spec" "$(build_flags_string)"
+    systemctl --user daemon-reload
+
+    echo "Job created: $_created_id"
+    local job_name="${SCRIPT_NAME}_${_created_id}"
     echo "Next run: $(systemctl --user list-timers "$job_name.timer" --no-pager | tail -n 2 | head -n 1 | awk '{print $1, $2, $3}')"
 }
 
@@ -409,63 +391,10 @@ remove_job() {
 
 # Create a job from edit mode (schedule + command + flags, prints short ID)
 create_job_from_edit() {
-    local schedule command_to_run="$2" flags="${3-}"
+    local schedule
     schedule=$(parse_time "$1")
-    local job_name short_id
-
-    job_name="${SCRIPT_NAME}_$(generate_id)"
-    short_id=$(job_id "$job_name")
-
-    mkdir -p "$SYSTEMD_USER_DIR"
-
-    # Service file
-    cat > "$SYSTEMD_USER_DIR/${job_name}.service" <<EOF
-$MARKER
-[Unit]
-Description=$SCRIPT_NAME job: $job_name
-
-[Service]
-Type=oneshot
-ExecStart=${SHELL:-/bin/bash} -c '$command_to_run'
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=$job_name
-EOF
-
-    # Add flags and notification lines
-    if [[ -n "$flags" ]]; then
-        echo "# SYSTAB_FLAGS=$flags" >> "$SYSTEMD_USER_DIR/${job_name}.service"
-        parse_flags "$flags"
-        write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$SYSTEMD_USER_DIR/${job_name}.service"
-    fi
-
-    # Timer file
-    cat > "$SYSTEMD_USER_DIR/${job_name}.timer" <<EOF
-$MARKER
-[Unit]
-Description=Timer for $SCRIPT_NAME job: $job_name
-
-[Timer]
-OnCalendar=$schedule
-EOF
-
-    if ! is_recurring "$schedule"; then
-        cat >> "$SYSTEMD_USER_DIR/${job_name}.timer" <<'ONETIME'
-Persistent=false
-RemainAfterElapse=no
-ONETIME
-    fi
-
-    cat >> "$SYSTEMD_USER_DIR/${job_name}.timer" <<EOF
-
-[Install]
-WantedBy=timers.target
-EOF
-
-    systemctl --user enable "$job_name.timer"
-    systemctl --user start "$job_name.timer"
-
-    job_id "$job_name"
+    _write_unit_files "$2" "$schedule" "${3-}"
+    echo "$_created_id"
 }
 
 # Edit jobs in crontab-like format
@@ -509,7 +438,7 @@ HEADER
                 local id schedule command flags id_field
                 id=$(job_id "$job")
                 schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
-                command=$(grep "^ExecStart=" "$service_file" | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//")
+                command=$(get_job_command "$service_file")
                 flags=$(grep "^# SYSTAB_FLAGS=" "$service_file" 2>/dev/null | sed 's/^# SYSTAB_FLAGS=//' || true)
                 if [[ -n "$flags" ]]; then
                     id_field="$id:$flags"
@@ -522,7 +451,7 @@ HEADER
                     printf '# %s | %s | %s\n' "$id_field" "$schedule" "$command"
                 fi
             fi
-        done < <(get_managed_timers)
+        done < <(get_managed_units timer)
     } > "$temp_file"
 
     # Save original for diffing
@@ -813,7 +742,7 @@ show_status() {
         while IFS= read -r job; do
             [[ -z "$job" ]] && continue
             job_list+=("$job")
-        done < <(get_managed_timers)
+        done < <(get_managed_units timer)
     fi
 
     if [[ ${#job_list[@]} -eq 0 ]]; then
@@ -849,7 +778,7 @@ show_status() {
         # Get command from service file
         if [[ -f "$service_file" ]]; then
             local command
-            command=$(grep "^ExecStart=" "$service_file" | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//")
+            command=$(get_job_command "$service_file")
             echo "  Command: $command"
         fi
         
@@ -859,19 +788,13 @@ show_status() {
         elif systemctl --user is-active "${job}.timer" &>/dev/null; then
             echo "  Timer: Active"
 
-            # Get next run time
-            local next_run
-            next_run=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1 | awk '{print $1, $2, $3, $4, $5}')
-            if [[ -n "$next_run" ]]; then
-                echo "  Next run: $next_run"
-            fi
-
-            # Get last run time
-            local last_run
-            last_run=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1 | awk '{for(i=6;i<=10;i++) printf $i" "; print ""}')
-            if [[ -n "$last_run" && "$last_run" != "n/a "* ]]; then
-                echo "  Last run: $last_run"
-            fi
+            local timer_line
+            timer_line=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1)
+            local next_run last_run
+            next_run=$(awk '{print $1, $2, $3, $4, $5}' <<< "$timer_line")
+            last_run=$(awk '{for(i=6;i<=10;i++) printf $i" "; print ""}' <<< "$timer_line")
+            [[ -n "$next_run" ]] && echo "  Next run: $next_run"
+            [[ -n "$last_run" && "$last_run" != "n/a "* ]] && echo "  Last run: $last_run"
         else
             echo "  Timer: Inactive/Completed"
         fi
@@ -902,13 +825,6 @@ show_status() {
 
 # List logs (or logs for a single job if opt_jobid is set)
 list_logs() {
-    local grep_cmd
-    if command -v rg &>/dev/null; then
-        grep_cmd="rg"
-    else
-        grep_cmd="grep"
-    fi
-
     local job
     local job_list=()
 
@@ -918,7 +834,7 @@ list_logs() {
         while IFS= read -r job; do
             [[ -z "$job" ]] && continue
             job_list+=("$job")
-        done < <(get_managed_services)
+        done < <(get_managed_units service)
     fi
 
     if [[ ${#job_list[@]} -eq 0 ]]; then
@@ -926,14 +842,15 @@ list_logs() {
         return
     fi
 
-    local count=${#job_list[@]}
-    echo "Found $count managed jobs"
+    echo "Found ${#job_list[@]} managed jobs"
     echo ""
-    
+
+    local grep_args=()
+    [[ -n "$opt_filter" ]] && grep_args=(--grep "$opt_filter")
+
     for job in "${job_list[@]}"; do
         echo "=== Logs for $(job_id "$job") ==="
-        
-        # Show timer status
+
         if systemctl --user is-active "${job}.timer" &>/dev/null; then
             echo "Status: Active"
             systemctl --user status "${job}.timer" --no-pager -l | head -n 3
@@ -941,13 +858,9 @@ list_logs() {
             echo "Status: Inactive"
         fi
         echo ""
-        
-        # Show service logs (unit messages + command output)
-        if [[ -n "$opt_filter" ]]; then
-            journalctl --user USER_UNIT="${job}.service" + SYSLOG_IDENTIFIER="$job" --no-pager 2>/dev/null | $grep_cmd "$opt_filter" || echo "no matching logs"
-        else
-            journalctl --user USER_UNIT="${job}.service" + SYSLOG_IDENTIFIER="$job" --no-pager 2>/dev/null || echo "no logs yet"
-        fi
+
+        journalctl --user USER_UNIT="${job}.service" + SYSLOG_IDENTIFIER="$job" \
+            --no-pager "${grep_args[@]}" 2>/dev/null || echo "no logs yet"
         echo ""
     done
 }
@@ -971,7 +884,7 @@ clean_jobs() {
             if [[ "$timer_state" == "elapsed" || "$timer_state" == "dead" ]]; then
                 # Get the command for display
                 local command
-                command=$(grep "^ExecStart=" "$SYSTEMD_USER_DIR/${job}.service" 2>/dev/null | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//" || echo "unknown")
+                command=$(get_job_command "$SYSTEMD_USER_DIR/${job}.service" 2>/dev/null || echo "unknown")
                 
                 read -p "Remove completed job '$job' (command: $command)? [y/N] " -n 1 -r </dev/tty
                 echo
@@ -984,7 +897,7 @@ clean_jobs() {
                 fi
             fi
         fi
-    done < <(get_managed_timers)
+    done < <(get_managed_units timer)
     
     if [[ $cleaned -gt 0 ]]; then
         systemctl --user daemon-reload
@@ -1068,17 +981,7 @@ parse_options() {
 }
 
 main() {
-    # Show usage if no arguments or -h
-    if [[ $# -eq 0 ]]; then
-        usage 0
-    fi
-    
-    for arg in "$@"; do
-        if [[ "$arg" == "-h" ]]; then
-            usage 0
-        fi
-    done
-    
+    [[ $# -eq 0 ]] && usage 0
     parse_options "$@"
     
     # Determine mode based on options

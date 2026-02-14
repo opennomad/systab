@@ -27,7 +27,7 @@ The script has two modes controlled by CLI flags:
   - `-S [id]`: Show timer status via `systemctl`, including short IDs and disabled state. Optional job ID to show a single job.
   - `-C`: Interactively clean up elapsed one-time timers (removes unit files from disk).
 
-Key functions: `parse_time` (time spec → OnCalendar), `create_job` (generates unit files), `edit_jobs` (crontab-style edit with diff-and-apply), `get_managed_services`/`get_managed_timers` (find tagged units), `clean_jobs` (remove elapsed one-time timers), `pause_job`/`resume_job` (disable/enable timers), `write_notify_lines` (append `ExecStopPost` notification lines), `build_flags_string`/`parse_flags` (convert between CLI options and flags format).
+Key functions: `parse_time` (time spec → OnCalendar), `_write_unit_files` (shared service+timer creation), `create_job`/`create_job_from_edit` (thin wrappers), `edit_jobs` (crontab-style edit with diff-and-apply), `get_managed_units` (find tagged units by type), `clean_jobs` (remove elapsed one-time timers), `pause_job`/`resume_job` (disable/enable timers), `write_notify_lines` (append `ExecStopPost` notification lines), `build_flags_string`/`parse_flags` (convert between CLI options and flags format).
 
 ## Testing
 
