@@ -10,7 +10,7 @@ Copy the `systab` script somewhere on your `$PATH`:
 cp systab ~/.local/bin/
 ```
 
-Requires `bash`, `systemctl`, and optionally `notify-send` (for `-i`) and `mail` (for `-m`).
+Requires `bash`, `systemctl`, and optionally `notify-send` (for `-i`) and `sendmail`/`msmtp` (for `-m`).
 
 ## Quick start
 
@@ -68,10 +68,10 @@ systab -t "every day at 2am" -f ~/backup.sh
 # From stdin
 echo "ls -la /tmp" | systab -t daily
 
-# With desktop notification on completion
+# With desktop notification (success/failure with status icon)
 systab -t "in 1 hour" -c "make build" -i
 
-# With email notification
+# With email notification (via sendmail)
 systab -t "every day at 6am" -c "df -h" -m user@example.com
 ```
 
@@ -84,8 +84,14 @@ systab -E
 # Show status of all jobs
 systab -S
 
+# Show status of a specific job
+systab -S a1b2c3
+
 # View logs (all jobs)
 systab -L
+
+# View logs for a specific job
+systab -L a1b2c3
 
 # View logs (filtered)
 systab -L error
@@ -106,14 +112,16 @@ systab -C
 
 ```
 a1b2c3 | daily | /home/user/backup.sh
-d4e5f6 | *:0/15 | curl -s https://example.com
-# g7h8i9 | hourly | echo "this job is paused"
+d4e5f6:i | *:0/15 | curl -s https://example.com
+g7h8i9:e=user@host | weekly | ~/backup.sh
+# aabbcc | hourly | echo "this job is paused"
 ```
 
 - Edit the schedule or command to update a job
 - Delete a line to remove a job
 - Add a line with `new` as the ID to create a job: `new | every 5 minutes | echo hello`
 - Comment out a line (`#`) to pause, uncomment to resume
+- Append notification flags after the ID with `:` — `i` for desktop, `e=addr` for email, comma-separated for both (e.g., `a1b2c3:i,e=user@host`)
 
 ### Job IDs
 
@@ -123,6 +131,8 @@ Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in
 
 systab creates systemd `.service` and `.timer` unit file pairs in `~/.config/systemd/user/`. Each managed unit is tagged with a `# SYSTAB_MANAGED` marker comment. One-time jobs auto-unload after firing. Job output (stdout/stderr) is captured in the systemd journal and viewable via `systab -L`.
 
+Notifications use `ExecStopPost` so they fire after the service completes regardless of success or failure. Desktop notifications show `dialog-information` or `dialog-error` icons based on `$SERVICE_RESULT`. Notification flags are persisted as `# SYSTAB_FLAGS=` comments in service files, so they survive across edit sessions.
+
 ## Options
 
 ```
@@ -130,15 +140,15 @@ Job Creation:
   -t <time>         Time specification (required for job creation)
   -c <command>      Command string to execute
   -f <script>       Script file to execute (reads stdin if neither -c nor -f)
-  -i                Send desktop notification on completion
-  -m <email>        Send email notification to address
+  -i                Send desktop notification on completion (success/failure)
+  -m <email>        Send email notification to address (via sendmail)
 
 Management:
   -P <id>           Pause (disable) a job
   -R <id>           Resume (enable) a paused job
   -E                Edit jobs in crontab-like format
-  -L [filter]       List job logs (optionally filtered)
-  -S                Show status of all managed jobs
+  -L [id] [filter]  List job logs (optionally for a specific job and/or filtered)
+  -S [id]           Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs
   -h                Show help
 ```

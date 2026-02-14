@@ -21,6 +21,7 @@ opt_status=false
 opt_pause=""
 opt_resume=""
 opt_filter=""
+opt_jobid=""
 
 usage() {
     cat <<EOF
@@ -32,15 +33,15 @@ Job Creation Options:
   -t <time>         Time specification (see TIME FORMATS below)
   -c <command>      Command string to execute
   -f <script>       Script file to execute
-  -i                Send desktop notification on completion
-  -m <email>        Send email notification to address
+  -i                Send desktop notification on completion (success/failure)
+  -m <email>        Send email notification to address (via sendmail)
 
 Management Options:
   -P <id>           Pause (disable) a job
   -R <id>           Resume (enable) a paused job
   -E                Edit jobs in crontab-like format
-  -L [filter]       List job logs (optionally filtered)
-  -S                Show status of all managed jobs and timers
+  -L [id] [filter]  List job logs (optionally for a specific job and/or filtered)
+  -S [id]           Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs
 
 TIME FORMATS:
@@ -53,8 +54,11 @@ EXAMPLES:
   # Run command every 5 minutes
   $SCRIPT_NAME -t "every 5 minutes" -c "echo Hello"
 
-  # Run script every day at 2am with notification
+  # Run script every day at 2am with desktop notification
   $SCRIPT_NAME -t "every day at 2am" -f ~/backup.sh -i
+
+  # Run command with email notification
+  $SCRIPT_NAME -t "in 5 minutes" -c "echo Hello" -m user@example.com
 
   # Run command in 5 minutes (one-time)
   $SCRIPT_NAME -t "in 5 minutes" -c "echo Hello"
@@ -62,7 +66,7 @@ EXAMPLES:
   # Read command from stdin
   echo "ls -la" | $SCRIPT_NAME -t "next monday at 9am"
 
-  # Edit existing jobs
+  # Edit existing jobs (supports adding notifications via ID:flags syntax)
   $SCRIPT_NAME -E
 
   # Pause and resume a job
@@ -89,6 +93,13 @@ error() {
 
 warn() {
     echo "Warning: $*" >&2
+}
+
+# Trim leading and trailing whitespace, result in _trimmed
+trim() {
+    _trimmed="$1"
+    _trimmed="${_trimmed#"${_trimmed%%[![:space:]]*}"}"
+    _trimmed="${_trimmed%"${_trimmed##*[![:space:]]}"}"
 }
 
 # Parse time specification into systemd OnCalendar format
@@ -261,6 +272,49 @@ get_managed_timers() {
     done
 }
 
+# Build flags string from opt_notify and opt_email
+build_flags_string() {
+    local flags=""
+    if $opt_notify; then
+        flags="i"
+    fi
+    if [[ -n "$opt_email" ]]; then
+        [[ -n "$flags" ]] && flags+=","
+        flags+="e=$opt_email"
+    fi
+    echo "$flags"
+}
+
+# Parse flags string into _notify_flag (bool) and _email_addr (string)
+parse_flags() {
+    local flags="$1"
+    _notify_flag=false
+    _email_addr=""
+    IFS=',' read -ra parts <<< "$flags"
+    for part in "${parts[@]}"; do
+        case "$part" in
+            i) _notify_flag=true ;;
+            e=*) _email_addr="${part#e=}" ;;
+        esac
+    done
+}
+
+# Write ExecStopPost notification lines to a service file
+# Usage: write_notify_lines <short_id> <notify_flag> <email_addr> <file>
+write_notify_lines() {
+    local short_id="$1" notify="$2" email="$3" file="$4"
+    if [[ "$notify" == true ]]; then
+        cat >> "$file" <<EOF
+ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then icon=dialog-information; s=completed; else icon=dialog-error; s="failed (\$EXIT_STATUS)"; fi; notify-send -i "\$icon" "systab" "Job $short_id: \$s" || true'
+EOF
+    fi
+    if [[ -n "$email" ]]; then
+        cat >> "$file" <<EOF
+ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; printf "Subject: systab: $short_id %s\\n\\n%s at %s\\n" "\$s" "\$s" "\$(date)" | sendmail $email'
+EOF
+    fi
+}
+
 # Create systemd service and timer files
 create_job() {
     local job_name command_to_run time_spec
@@ -286,6 +340,11 @@ create_job() {
     # Create systemd user directory if needed
     mkdir -p "$SYSTEMD_USER_DIR"
 
+    # Build flags
+    local flags short_id
+    flags=$(build_flags_string)
+    short_id=$(job_id "$job_name")
+
     # Create service file
     local service_file="$SYSTEMD_USER_DIR/${job_name}.service"
     cat > "$service_file" <<EOF
@@ -300,23 +359,11 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=$job_name
 EOF
-    
-    # Add notification wrapper if needed
-    if $opt_notify || [[ -n "$opt_email" ]]; then
-        if $opt_notify; then
-            # Get current user's runtime directory and display
-            local user_id
-            user_id=$(id -u)
-            cat >> "$service_file" <<EOF
-ExecStartPost=/bin/sh -c 'export DISPLAY=:0; export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$user_id/bus; /usr/bin/notify-send "$SCRIPT_NAME" "Job completed: $job_name" || true'
-EOF
-        fi
-        
-        if [[ -n "$opt_email" ]]; then
-            cat >> "$service_file" <<EOF
-ExecStartPost=/bin/sh -c 'echo "Job $job_name completed at \$(date)" | mail -s "$SCRIPT_NAME: Job completed" "$opt_email"'
-EOF
-        fi
+
+    # Add flags comment and notification lines
+    if [[ -n "$flags" ]]; then
+        echo "# SYSTAB_FLAGS=$flags" >> "$service_file"
+        write_notify_lines "$short_id" "$opt_notify" "$opt_email" "$service_file"
     fi
     
     # Create timer file
@@ -360,13 +407,14 @@ remove_job() {
     rm -f "$SYSTEMD_USER_DIR/${job_name}.service" "$SYSTEMD_USER_DIR/${job_name}.timer"
 }
 
-# Create a job from edit mode (schedule + command, prints short ID)
+# Create a job from edit mode (schedule + command + flags, prints short ID)
 create_job_from_edit() {
-    local schedule command_to_run="$2"
+    local schedule command_to_run="$2" flags="${3-}"
     schedule=$(parse_time "$1")
-    local job_name
+    local job_name short_id
 
     job_name="${SCRIPT_NAME}_$(generate_id)"
+    short_id=$(job_id "$job_name")
 
     mkdir -p "$SYSTEMD_USER_DIR"
 
@@ -383,6 +431,13 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=$job_name
 EOF
+
+    # Add flags and notification lines
+    if [[ -n "$flags" ]]; then
+        echo "# SYSTAB_FLAGS=$flags" >> "$SYSTEMD_USER_DIR/${job_name}.service"
+        parse_flags "$flags"
+        write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$SYSTEMD_USER_DIR/${job_name}.service"
+    fi
 
     # Timer file
     cat > "$SYSTEMD_USER_DIR/${job_name}.timer" <<EOF
@@ -425,10 +480,15 @@ edit_jobs() {
     {
         cat <<'HEADER'
 # systab jobs — edit schedule/command, add/remove lines
-# Format: ID | SCHEDULE | COMMAND  (pipe-separated)
+# Format: ID[:FLAGS] | SCHEDULE | COMMAND  (pipe-separated)
 # Remove a line to delete a job.
 # Add a line with "new" as ID to create a job: new | daily | /path/to/cmd
 # Comment out a line to disable, uncomment to re-enable.
+#
+# Notification flags (append to ID with ':'): i = desktop, e=addr = email
+#   a1b2c3:i | daily | cmd               desktop notification
+#   a1b2c3:e=user@host | daily | cmd      email notification
+#   a1b2c3:i,e=user@host | daily | cmd    both
 #
 # Schedule formats (systemd OnCalendar):
 #   hourly, daily, weekly, monthly, yearly
@@ -446,14 +506,20 @@ HEADER
             local service_file="$SYSTEMD_USER_DIR/${job}.service"
 
             if [[ -f "$timer_file" && -f "$service_file" ]]; then
-                local id schedule command
+                local id schedule command flags id_field
                 id=$(job_id "$job")
                 schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
                 command=$(grep "^ExecStart=" "$service_file" | sed 's/^ExecStart=.*-c //' | sed "s/^'//" | sed "s/'$//")
-                if is_job_enabled "$job"; then
-                    printf '%s | %s | %s\n' "$id" "$schedule" "$command"
+                flags=$(grep "^# SYSTAB_FLAGS=" "$service_file" 2>/dev/null | sed 's/^# SYSTAB_FLAGS=//' || true)
+                if [[ -n "$flags" ]]; then
+                    id_field="$id:$flags"
                 else
-                    printf '# %s | %s | %s\n' "$id" "$schedule" "$command"
+                    id_field="$id"
+                fi
+                if is_job_enabled "$job"; then
+                    printf '%s | %s | %s\n' "$id_field" "$schedule" "$command"
+                else
+                    printf '# %s | %s | %s\n' "$id_field" "$schedule" "$command"
                 fi
             fi
         done < <(get_managed_timers)
@@ -462,17 +528,68 @@ HEADER
     # Save original for diffing
     cp "$temp_file" "$orig_file"
 
-    # Open in editor
-    if ! "${EDITOR:-vi}" "$temp_file"; then
-        echo "Editor exited with error, aborting."
-        return 1
-    fi
+    # Validate all time specs in a crontab file, returns 0 if valid
+    # Prints error messages for each bad schedule
+    validate_crontab_schedules() {
+        local file="$1" errors=0 line
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            local is_comment=false
+            # Strip comment prefix for disabled jobs
+            if [[ "$line" =~ ^#[[:space:]]+(.*) ]]; then
+                line="${BASH_REMATCH[1]}"
+                is_comment=true
+            fi
+            [[ "$line" == *"|"* ]] || continue
+            # Extract and trim ID field
+            local id_field="${line%%|*}"
+            trim "$id_field"; id_field="$_trimmed"
+            # Strip :flags suffix
+            local id_bare="${id_field%%:*}"
+            # Only validate lines with a valid job ID (6-char hex or "new")
+            if $is_comment; then
+                [[ "$id_bare" =~ ^[0-9a-f]{6}$ ]] || continue
+            else
+                [[ "$id_bare" =~ ^[0-9a-f]{6}$ || "$id_bare" == "new" ]] || continue
+            fi
+            local sched="${line#*|}"
+            sched="${sched%%|*}"
+            trim "$sched"; sched="$_trimmed"
+            [[ -z "$sched" ]] && continue
+            if ! (parse_time "$sched") &>/dev/null; then
+                echo "Bad schedule: \"$sched\"" >&2
+                errors=$((errors + 1))
+            fi
+        done < "$file"
+        return "$errors"
+    }
 
-    # Check for no changes
-    if diff -q "$orig_file" "$temp_file" &>/dev/null; then
-        echo "No changes."
-        return
-    fi
+    # Edit loop: open editor, validate, re-edit on errors (like crontab -e)
+    while true; do
+        if ! "${EDITOR:-vi}" "$temp_file"; then
+            echo "Editor exited with error, aborting."
+            return 1
+        fi
+
+        # Check for no changes
+        if diff -q "$orig_file" "$temp_file" &>/dev/null; then
+            echo "No changes."
+            return
+        fi
+
+        # Validate schedules before applying
+        if validate_crontab_schedules "$temp_file"; then
+            break
+        fi
+
+        echo "Errors in systab file, can't install." >&2
+        read -p "Do you want to retry the same edit? (y/n) " -n 1 -r </dev/tty
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            return 1
+        fi
+    done
 
     # Parse files into associative arrays: id -> "schedule\tcmd"
     # "new" lines are collected separately since there can be multiple
@@ -480,45 +597,56 @@ HEADER
     declare -A orig_jobs edited_jobs orig_commented edited_commented
     declare -a new_jobs=()
 
-    # Parse a crontab line into id, sched, cmd (split on first two | delimiters)
+    # Parse a crontab line into id, flags, sched, cmd (split on first two | delimiters)
+    # _parsed_id gets the bare ID, _parsed_flags gets any flags after ':'
     parse_crontab_line() {
         local line="$1"
-        _parsed_id="" _parsed_sched="" _parsed_cmd=""
+        _parsed_id="" _parsed_flags="" _parsed_sched="" _parsed_cmd=""
         if [[ "$line" == *"|"* ]]; then
-            _parsed_id="${line%%|*}"
+            local id_field="${line%%|*}"
             local rest="${line#*|}"
             _parsed_sched="${rest%%|*}"
             _parsed_cmd="${rest#*|}"
             # Trim leading/trailing whitespace
-            _parsed_id="${_parsed_id#"${_parsed_id%%[![:space:]]*}"}" _parsed_id="${_parsed_id%"${_parsed_id##*[![:space:]]}"}"
-            _parsed_sched="${_parsed_sched#"${_parsed_sched%%[![:space:]]*}"}" _parsed_sched="${_parsed_sched%"${_parsed_sched##*[![:space:]]}"}"
-            _parsed_cmd="${_parsed_cmd#"${_parsed_cmd%%[![:space:]]*}"}" _parsed_cmd="${_parsed_cmd%"${_parsed_cmd##*[![:space:]]}"}"
+            trim "$id_field"; id_field="$_trimmed"
+            trim "$_parsed_sched"; _parsed_sched="$_trimmed"
+            trim "$_parsed_cmd"; _parsed_cmd="$_trimmed"
+            # Split id_field on ':' into ID and flags
+            if [[ "$id_field" == *:* ]]; then
+                _parsed_id="${id_field%%:*}"
+                _parsed_flags="${id_field#*:}"
+            else
+                _parsed_id="$id_field"
+            fi
         fi
     }
 
     # Parse a file, populating jobs and commented arrays
+    # Values stored as "flags<TAB>schedule|cmd"
     # Usage: parse_crontab_file <file> <jobs_var> <commented_var> [new_jobs_var]
     parse_crontab_file() {
         local file="$1" jobs_ref="$2" commented_ref="$3" new_ref="${4-}"
-        local line
+        local line tab=$'\t'
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             # Check for commented job line: "# <id> <sched> <cmd>"
             if [[ "$line" =~ ^#[[:space:]]+(.*) ]]; then
                 local uncommented="${BASH_REMATCH[1]}"
                 parse_crontab_line "$uncommented"
-                # Only treat as disabled job if ID looks like a hex short ID
+                # Only treat as disabled job if ID looks like a hex short ID (with optional :flags)
                 if [[ -n "$_parsed_id" && -n "$_parsed_sched" && "$_parsed_id" =~ ^[0-9a-f]{6}$ ]]; then
-                    eval "${commented_ref}[\"\$_parsed_id\"]=\"\${_parsed_sched}|\${_parsed_cmd}\""
+                    local _val="${_parsed_flags}${tab}${_parsed_sched}|${_parsed_cmd}"
+                    eval "${commented_ref}[\"\$_parsed_id\"]=\$_val"
                 fi
                 continue
             fi
             parse_crontab_line "$line"
             [[ -n "$_parsed_id" && -n "$_parsed_sched" ]] || continue
+            local _val="${_parsed_flags}${tab}${_parsed_sched}|${_parsed_cmd}"
             if [[ "$_parsed_id" == "new" && -n "$new_ref" ]]; then
-                eval "${new_ref}+=(\"\${_parsed_sched}|\${_parsed_cmd}\")"
+                eval "${new_ref}+=(\"\$_val\")"
             else
-                eval "${jobs_ref}[\"\$_parsed_id\"]=\"\${_parsed_sched}|\${_parsed_cmd}\""
+                eval "${jobs_ref}[\"\$_parsed_id\"]=\$_val"
             fi
         done < "$file"
     }
@@ -545,11 +673,13 @@ HEADER
 
     # Creations: "new" lines from edited file
     for entry in "${new_jobs[@]}"; do
-        local sched cmd
-        sched="${entry%%|*}"
-        cmd="${entry#*|}"
+        local new_flags new_rest sched cmd
+        new_flags="${entry%%	*}"
+        new_rest="${entry#*	}"
+        sched="${new_rest%%|*}"
+        cmd="${new_rest#*|}"
         local result
-        result=$(create_job_from_edit "$sched" "$cmd")
+        result=$(create_job_from_edit "$sched" "$cmd" "$new_flags")
         echo "Created: $result"
         created=$((created + 1))
         needs_reload=true
@@ -577,7 +707,7 @@ HEADER
         # Skip if deleted
         [[ -z "${edited_jobs[$id]+x}" && -z "${edited_commented[$id]+x}" ]] && continue
 
-        # Get old and new values
+        # Get old and new values (format: "flags\tsched|cmd")
         local old_entry="" new_entry=""
         if $was_commented; then
             old_entry="${orig_commented[$id]}"
@@ -589,6 +719,13 @@ HEADER
         elif [[ -n "${edited_jobs[$id]+x}" ]]; then
             new_entry="${edited_jobs[$id]}"
         fi
+
+        # Split into flags and sched|cmd parts
+        local old_flags old_rest new_flags new_rest
+        old_flags="${old_entry%%	*}"
+        old_rest="${old_entry#*	}"
+        new_flags="${new_entry%%	*}"
+        new_rest="${new_entry#*	}"
 
         # Handle enable/disable transitions
         if ! $was_commented && $now_commented; then
@@ -603,13 +740,13 @@ HEADER
             needs_reload=true
         fi
 
-        # Handle schedule/command changes (whether active or commented)
+        # Handle schedule/command/flags changes (whether active or commented)
         if [[ "$old_entry" != "$new_entry" ]]; then
             local old_sched new_sched old_cmd new_cmd
-            old_sched="${old_entry%%|*}"
-            new_sched="${new_entry%%|*}"
-            old_cmd="${old_entry#*|}"
-            new_cmd="${new_entry#*|}"
+            old_sched="${old_rest%%|*}"
+            new_sched="${new_rest%%|*}"
+            old_cmd="${old_rest#*|}"
+            new_cmd="${new_rest#*|}"
 
             local timer_file="$SYSTEMD_USER_DIR/${jname}.timer"
             local service_file="$SYSTEMD_USER_DIR/${jname}.service"
@@ -633,6 +770,19 @@ HEADER
                 sed -i "s|^ExecStart=.*|ExecStart=${SHELL:-/bin/bash} -c '$new_cmd'|" "$service_file"
             fi
 
+            # Handle flags changes
+            if [[ "$old_flags" != "$new_flags" && -f "$service_file" ]]; then
+                # Remove existing notification lines and flags comment
+                sed -i '/^ExecStopPost=/d' "$service_file"
+                sed -i '/^# SYSTAB_FLAGS=/d' "$service_file"
+                # Add new flags and notification lines
+                if [[ -n "$new_flags" ]]; then
+                    echo "# SYSTAB_FLAGS=$new_flags" >> "$service_file"
+                    parse_flags "$new_flags"
+                    write_notify_lines "$id" "$_notify_flag" "$_email_addr" "$service_file"
+                fi
+            fi
+
             # Only restart if the job is active (not being disabled)
             if ! $now_commented; then
                 systemctl --user restart "${jname}.timer" 2>/dev/null || true
@@ -652,21 +802,25 @@ HEADER
     echo "Summary: $created created, $updated updated, $deleted deleted, $enabled enabled, $disabled disabled"
 }
 
-# Show status of all managed jobs
+# Show status of all managed jobs (or a single job if opt_jobid is set)
 show_status() {
     local job
     local job_list=()
-    
-    while IFS= read -r job; do
-        [[ -z "$job" ]] && continue
-        job_list+=("$job")
-    done < <(get_managed_timers)
-    
+
+    if [[ -n "$opt_jobid" ]]; then
+        job_list+=("${SCRIPT_NAME}_${opt_jobid}")
+    else
+        while IFS= read -r job; do
+            [[ -z "$job" ]] && continue
+            job_list+=("$job")
+        done < <(get_managed_timers)
+    fi
+
     if [[ ${#job_list[@]} -eq 0 ]]; then
         echo "No managed jobs found."
         return
     fi
-    
+
     local count=${#job_list[@]}
     echo "Managed Jobs Status - $count total"
     echo "=========================================="
@@ -746,7 +900,7 @@ show_status() {
     systemctl --user list-timers "systab_*" --no-pager 2>/dev/null || echo "none active"
 }
 
-# List logs
+# List logs (or logs for a single job if opt_jobid is set)
 list_logs() {
     local grep_cmd
     if command -v rg &>/dev/null; then
@@ -754,19 +908,24 @@ list_logs() {
     else
         grep_cmd="grep"
     fi
-    
+
     local job
     local job_list=()
-    while IFS= read -r job; do
-        [[ -z "$job" ]] && continue
-        job_list+=("$job")
-    done < <(get_managed_services)
-    
+
+    if [[ -n "$opt_jobid" ]]; then
+        job_list+=("${SCRIPT_NAME}_${opt_jobid}")
+    else
+        while IFS= read -r job; do
+            [[ -z "$job" ]] && continue
+            job_list+=("$job")
+        done < <(get_managed_services)
+    fi
+
     if [[ ${#job_list[@]} -eq 0 ]]; then
         echo "No managed jobs found."
         return
     fi
-    
+
     local count=${#job_list[@]}
     echo "Found $count managed jobs"
     echo ""
@@ -855,9 +1014,25 @@ parse_options() {
         esac
     done
     
-    # Check if there's a filter argument after -L
-    if $opt_list && [[ $OPTIND -le $# ]]; then
-        opt_filter="${!OPTIND}"
+    # Check for trailing arguments after -S or -L
+    if ($opt_list || $opt_status) && [[ $OPTIND -le $# ]]; then
+        local trailing="${!OPTIND}"
+        # If it looks like a job ID and the job exists, use as job filter
+        if [[ "$trailing" =~ ^[0-9a-f]{6}$ ]] && [[ -f "$SYSTEMD_USER_DIR/${SCRIPT_NAME}_${trailing}.timer" ]]; then
+            opt_jobid="$trailing"
+            # For -L, check for a second trailing arg as text filter
+            if $opt_list; then
+                local next_idx=$((OPTIND + 1))
+                if [[ $next_idx -le $# ]]; then
+                    opt_filter="${!next_idx}"
+                fi
+            fi
+        elif $opt_list; then
+            # Not a job ID — treat as text filter for backward compatibility
+            opt_filter="$trailing"
+        else
+            error "No job found with ID: $trailing"
+        fi
     fi
     
     # Validate mutually exclusive options
