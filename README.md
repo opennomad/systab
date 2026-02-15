@@ -1,5 +1,8 @@
 # systab
 
+[![ShellCheck](https://code.opennomad.com/opennomad/systab/actions/workflows/ci.yml/badge.svg)](https://code.opennomad.com/opennomad/systab/actions?workflow=ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+
 A cron/at-like interface for systemd user timers. Create, manage, and monitor scheduled jobs without writing unit files by hand.
 
 <table>

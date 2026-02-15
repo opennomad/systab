@@ -37,6 +37,8 @@ Key functions: `parse_time` (time spec → OnCalendar), `_write_unit_files` (sha
 
 Runs 58 tests against real systemd user timers covering job creation, job names, status, logs, disable/enable, notifications, time format parsing, error cases, and cleanup. All test jobs are cleaned up automatically via trap.
 
+Tests require a real systemd user session (`systemctl --user`) and cannot run in containers. CI runs ShellCheck only; tests must be run locally before submitting changes.
+
 ## Notes
 
 - ShellCheck can be used for linting: `shellcheck systab`.
