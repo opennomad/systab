@@ -169,3 +169,9 @@ Management:
   -C                Clean up completed one-time jobs
   -h                Show help
 ```
+
+## FAQ
+
+**What's the difference between `-c` and `-f`?**
+
+`-f` validates that the file exists and is executable at creation time, catching typos and permission issues early. With `-c`, errors only surface when systemd runs the job later (visible via `systab -L`). Under the hood, both produce the same `ExecStart` line.
