@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
+# systab - A cron/at/batch-like interface for systemd
+# Copyright (C) 2026 opennomad
+# SPDX-License-Identifier: AGPL-3.0-or-later
 set -euo pipefail
 
-# systab - A cron/at/batch-like interface for systemd
 # Managed jobs are marked with: # SYSTAB_MANAGED
 
 readonly SCRIPT_NAME="systab"

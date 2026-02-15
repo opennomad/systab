@@ -173,6 +173,16 @@ Management:
   -h                Show help
 ```
 
+## License
+
+AGPL-3.0-or-later. See [LICENSE](LICENSE).
+
+## Contributing
+
+The primary repository is hosted on [Forgejo](https://code.opennomad.com/opennomad/systab) with a public mirror on [GitHub](https://github.com/opennomad/systab).
+
+Contributions (issues and pull requests) are welcome on GitHub.
+
 ## FAQ
 
 **What's the difference between `-c` and `-f`?**
