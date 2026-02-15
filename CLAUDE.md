@@ -31,15 +31,11 @@ Key functions: `parse_time` (time spec → OnCalendar), `_write_unit_files` (sha
 
 ## Testing
 
-There are no automated tests. Test manually with systemd user timers:
 ```bash
-./systab -t "every 5 minutes" -c "echo test"
-./systab -S
-./systab -L
-./systab -P <id>
-./systab -R <id>
-./systab -C
+./test.sh
 ```
+
+Runs 44 tests against real systemd user timers covering job creation, status, logs, pause/resume, notifications, time format parsing, error cases, and cleanup. All test jobs are cleaned up automatically via trap.
 
 ## Notes
 
