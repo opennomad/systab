@@ -59,7 +59,7 @@ systab accepts several time formats:
 | Relative | `in 5 minutes` | One-time |
 | Relative | `tomorrow` | One-time |
 | Absolute | `2025-06-15 14:30` | One-time |
-| Absolute | `next tuesday at noon` | One-time |
+| Absolute | `next tuesday at 9am` | One-time |
 | Systemd keyword | `hourly`, `daily`, `weekly`, `monthly` | Recurring |
 | Systemd OnCalendar | `*:0/15` (every 15 min) | Recurring |
 | Systemd OnCalendar | `*-*-* 02:00:00` (daily at 2am) | Recurring |
@@ -67,7 +67,7 @@ systab accepts several time formats:
 
 Relative and absolute formats are parsed by `date -d`. Systemd OnCalendar values are passed through directly.
 
-Note: `date -d` does not technically like the "*in* 5 minutes" syntax. `systab` removes the offending "in".
+Note: `date -d` does not technically like "*in* 5 minutes" or "*at*" between day and time. `systab` strips "in" and "at" before passing to `date -d`.
 
 ## Usage
 

@@ -51,7 +51,7 @@ Management Options:
 TIME FORMATS:
   Natural:   "every 5 minutes", "every day at 2am", "every monday at 9am"
   Relative:  "in 5 minutes", "in 2 hours", "tomorrow"
-  Absolute:  "2025-01-21 14:30", "next tuesday at noon"
+  Absolute:  "2025-01-21 14:30", "next tuesday at 9am"
   Systemd:   "daily", "weekly", "hourly", "*:0/15" (every 15 min)
 
 EXAMPLES:
@@ -161,8 +161,10 @@ parse_time() {
 
     # Try to parse with date command (one-time specs)
     # Strip "in " prefix for natural phrasing ("in 5 minutes" → "5 minutes")
+    # Strip " at " before times ("next tuesday at noon" → "next tuesday noon")
     local date_spec="$time_spec"
     [[ "${date_spec,,}" == in\ * ]] && date_spec="${date_spec:3}"
+    date_spec="${date_spec// at / }"
     local parsed_date
     if parsed_date=$(date -d "$date_spec" '+%Y-%m-%d %H:%M:%S' 2>/dev/null); then
         echo "$parsed_date"
