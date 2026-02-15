@@ -18,7 +18,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -t 'every 5 minutes' -c 'echo health check OK'"
+Type "systab -t 'every 5 minutes' -n healthcheck -c 'echo health check OK'"
 Sleep 500ms
 Enter
 Sleep 2s
@@ -76,7 +76,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -D $(systab -S 2>/dev/null | grep -m1 'Job:' | awk '{print $2}')"
+Type "systab -D healthcheck"
 Sleep 500ms
 Enter
 Sleep 2s
@@ -105,7 +105,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -E $(systab -S 2>/dev/null | grep -m1 'Disabled' -B4 | grep 'Job:' | awk '{print $2}')"
+Type "systab -E healthcheck"
 Sleep 500ms
 Enter
 Sleep 2s

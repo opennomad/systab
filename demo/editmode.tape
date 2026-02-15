@@ -45,7 +45,7 @@ Down 5
 Sleep 500ms
 
 # Add a new job line with notification flags
-Type "new:i,e=admin@example.com | hourly | curl -s https://example.com/health"
+Type "new:n=health,i,e=admin@example.com | hourly | curl -s https://example.com/health"
 Sleep 1s
 Enter
 

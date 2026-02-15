@@ -28,11 +28,11 @@ Requires `bash`, `systemctl`, and optionally `notify-send` (for `-i`) and `sendm
 ## Quick start
 
 ```bash
-# Run a command every 5 minutes
-systab -t "every 5 minutes" -c "curl -s https://example.com/health"
+# Run a command every 5 minutes (with a name for easy reference)
+systab -t "every 5 minutes" -n healthcheck -c "curl -s https://example.com/health"
 
 # Run a backup script every day at 2am
-systab -t "every day at 2am" -f ~/backup.sh
+systab -t "every day at 2am" -n backup -f ~/backup.sh
 
 # Run a one-time command in 30 minutes
 systab -t "in 30 minutes" -c "echo reminder"
@@ -67,16 +67,18 @@ systab accepts several time formats:
 
 Relative and absolute formats are parsed by `date -d`. Systemd OnCalendar values are passed through directly.
 
+Note: `date -d` does not technically like the "*in* 5 minutes" syntax. `systab` removes the offending "in".
+
 ## Usage
 
 ### Creating jobs
 
 ```bash
-# Command string
-systab -t "every 5 minutes" -c "echo hello"
+# Command string (with optional name)
+systab -t "every 5 minutes" -n ping -c "echo hello"
 
 # Script file
-systab -t "every day at 2am" -f ~/backup.sh
+systab -t "every day at 2am" -n backup -f ~/backup.sh
 
 # From stdin
 echo "ls -la /tmp" | systab -t daily
@@ -100,23 +102,23 @@ systab -e
 # Show status of all jobs
 systab -S
 
-# Show status of a specific job
+# Show status of a specific job (by ID or name)
 systab -S a1b2c3
+systab -S backup
 
 # View logs (all jobs)
 systab -L
 
-# View logs for a specific job
+# View logs for a specific job (by ID or name)
 systab -L a1b2c3
+systab -L backup
 
 # View logs (filtered)
 systab -L error
 
-# Disable a job
-systab -D <id>
-
-# Enable a disabled job
-systab -E <id>
+# Disable/enable a job (by ID or name)
+systab -D backup
+systab -E backup
 
 # Clean up completed one-time jobs
 systab -C
@@ -127,9 +129,9 @@ systab -C
 `systab -e` opens your editor with a pipe-delimited job list:
 
 ```
-a1b2c3 | daily | /home/user/backup.sh
+a1b2c3:n=backup | daily | /home/user/backup.sh
 d4e5f6:i | *:0/15 | curl -s https://example.com
-g7h8i9:e=user@host | weekly | ~/backup.sh
+g7h8i9:n=weekly-backup,e=user@host | weekly | ~/backup.sh
 # aabbcc | hourly | echo "this job is disabled"
 ```
 
@@ -137,11 +139,11 @@ g7h8i9:e=user@host | weekly | ~/backup.sh
 - Delete a line to remove a job
 - Add a line with `new` as the ID to create a job: `new | every 5 minutes | echo hello`
 - Comment out a line (`#`) to disable, uncomment to enable
-- Append notification flags after the ID with `:` — `i` for desktop, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:i,o,e=user@host`)
+- Append flags after the ID with `:` — `n=name` for naming, `i` for desktop notification, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:n=backup,i,o,e=user@host`)
 
-### Job IDs
+### Job IDs and names
 
-Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. Use this ID with `-D`, `-E`, and `-L`.
+Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. You can also assign a human-readable name with `-n` at creation time. Names can be used interchangeably with hex IDs in `-D`, `-E`, `-S`, and `-L`. Names must be unique and cannot contain whitespace, pipes, or colons.
 
 ## How it works
 
@@ -156,6 +158,7 @@ Job Creation:
   -t <time>         Time specification (required for job creation)
   -c <command>      Command string to execute
   -f <script>       Script file to execute (reads stdin if neither -c nor -f)
+  -n <name>         Give the job a human-readable name (usable in place of hex ID)
   -i                Send desktop notification on completion (success/failure)
   -m <email>        Send email notification to address (via sendmail)
   -o [lines]        Include job output in notifications (default: 10 lines)

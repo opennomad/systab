@@ -94,9 +94,9 @@ assert_file_contains() {
     fi
 }
 
-# Extract job ID from "Job created: <id>" output
+# Extract job ID from "Job created: <id>" or "Job created: <id> (<name>)" output
 extract_id() {
-    sed -n 's/^Job created: \([0-9a-f]\{6\}\)$/\1/p' <<< "$_last_output"
+    sed -n 's/^Job created: \([0-9a-f]\{6\}\)\( .*\)\{0,1\}$/\1/p' <<< "$_last_output"
 }
 
 # Remove all systab_* unit files and reload
@@ -270,6 +270,37 @@ assert_success "parse_time 'in 5 minutes' succeeds" bash -c '
     source <(sed -n "/^parse_time()/,/^}/p" ./systab; sed -n "/^error()/,/^}/p" ./systab)
     parse_time "in 5 minutes"
 '
+
+# ============================================================
+# Job names (-n)
+# ============================================================
+
+echo ""
+echo "${BOLD}--- Job names ---${RESET}"
+
+assert_output "create job with name" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo named_test" -n mytest
+id_named=$(extract_id)
+assert_last_output_contains "name appears in creation output" "(mytest)"
+
+assert_file_contains "service file has SYSTAB_NAME" \
+    "$SYSTEMD_USER_DIR/systab_${id_named}.service" "^# SYSTAB_NAME=mytest$"
+
+assert_output "status by name" "(mytest)" $SYSTAB -S mytest
+assert_output "logs by name" "(mytest)" $SYSTAB -L mytest
+
+assert_output "disable by name" "Disabled:" $SYSTAB -D mytest
+assert_last_output_contains "disable output shows name" "(mytest)"
+
+assert_output "enable by name" "Enabled:" $SYSTAB -E mytest
+assert_last_output_contains "enable output shows name" "(mytest)"
+
+assert_output "status shows name" "(mytest)" $SYSTAB -S
+
+assert_failure "duplicate name rejected" $SYSTAB -t "every 10 minutes" -c "echo dup" -n mytest
+
+assert_failure "name with whitespace rejected" $SYSTAB -t "daily" -c "echo bad" -n "my test"
+assert_failure "name with pipe rejected" $SYSTAB -t "daily" -c "echo bad" -n "my|test"
+assert_failure "name with colon rejected" $SYSTAB -t "daily" -c "echo bad" -n "my:test"
 
 # ============================================================
 # Error cases

@@ -22,6 +22,7 @@ opt_disable=""
 opt_enable=""
 opt_filter=""
 opt_output=""
+opt_name=""
 opt_jobid=""
 
 usage() {
@@ -34,6 +35,7 @@ Job Creation Options:
   -t <time>         Time specification (see TIME FORMATS below)
   -c <command>      Command string to execute
   -f <script>       Script file to execute
+  -n <name>         Give the job a human-readable name (usable in place of hex ID)
   -i                Send desktop notification on completion (success/failure)
   -m <email>        Send email notification to address (via sendmail)
   -o [lines]        Include job output in notifications (default: 10 lines)
@@ -53,11 +55,11 @@ TIME FORMATS:
   Systemd:   "daily", "weekly", "hourly", "*:0/15" (every 15 min)
 
 EXAMPLES:
-  # Run command every 5 minutes
-  $SCRIPT_NAME -t "every 5 minutes" -c "echo Hello"
+  # Run command every 5 minutes with a name
+  $SCRIPT_NAME -t "every 5 minutes" -n healthcheck -c "echo Hello"
 
   # Run script every day at 2am with desktop notification
-  $SCRIPT_NAME -t "every day at 2am" -f ~/backup.sh -i
+  $SCRIPT_NAME -t "every day at 2am" -n backup -f ~/backup.sh -i
 
   # Run command with email notification
   $SCRIPT_NAME -t "in 5 minutes" -c "echo Hello" -m user@example.com
@@ -71,9 +73,9 @@ EXAMPLES:
   # Edit existing jobs (supports adding notifications via ID:flags syntax)
   $SCRIPT_NAME -e
 
-  # Disable and enable a job
+  # Disable and enable a job (by hex ID or name)
   $SCRIPT_NAME -D <id>
-  $SCRIPT_NAME -E <id>
+  $SCRIPT_NAME -E backup
 
   # View logs for backup jobs
   $SCRIPT_NAME -L backup
@@ -209,35 +211,88 @@ enable_job() {
     systemctl --user start "${1}.timer" 2>/dev/null || true
 }
 
+# Resolve a job identifier (hex ID or name) to a 6-char hex ID
+# Sets _resolved_id; errors if not found
+resolve_job_id() {
+    local input="$1"
+    # Try as hex ID first
+    if [[ "$input" =~ ^[0-9a-f]{6}$ ]]; then
+        local timer_file="$SYSTEMD_USER_DIR/${SCRIPT_NAME}_${input}.timer"
+        if [[ -f "$timer_file" ]]; then
+            _resolved_id="$input"
+            return
+        fi
+    fi
+    # Try as name: grep service files for SYSTAB_NAME=<input>
+    local file
+    for file in "${SYSTEMD_USER_DIR}/${SCRIPT_NAME}"_*.service; do
+        [[ -f "$file" ]] || continue
+        if grep -q "^# SYSTAB_NAME=${input}$" "$file" 2>/dev/null; then
+            local base
+            base=$(basename "$file" .service)
+            _resolved_id=$(job_id "$base")
+            return
+        fi
+    done
+    error "No job found with ID or name: $input"
+}
+
+# Get the human-readable name from a service file (empty string if none)
+get_job_name() {
+    local service_file="$1"
+    sed -n 's/^# SYSTAB_NAME=//p' "$service_file" 2>/dev/null || true
+}
+
+# Format a job identifier for display: "id (name)" or just "id"
+format_job_id() {
+    local id="$1" name="$2"
+    if [[ -n "$name" ]]; then
+        echo "$id ($name)"
+    else
+        echo "$id"
+    fi
+}
+
 # Validate a short ID refers to a managed job, sets _job_name
 validate_job_id() {
-    local id="$1"
+    resolve_job_id "$1"
+    local id="$_resolved_id"
     _job_name="${SCRIPT_NAME}_${id}"
     local timer_file="$SYSTEMD_USER_DIR/${_job_name}.timer"
     [[ -f "$timer_file" ]] || error "No job found with ID: $id"
     grep -q "^$MARKER" "$timer_file" 2>/dev/null || error "Not a managed job: $id"
 }
 
-# Disable a job by short ID
+# Disable a job by short ID or name
 disable_job_by_id() {
     validate_job_id "$1"
+    local id="$_resolved_id"
+    local name
+    name=$(get_job_name "$SYSTEMD_USER_DIR/${_job_name}.service")
+    local label
+    label=$(format_job_id "$id" "$name")
     if ! is_job_enabled "$_job_name"; then
-        echo "Already disabled: $1"
+        echo "Already disabled: $label"
         return
     fi
     disable_job "$_job_name"
-    echo "Disabled: $1"
+    echo "Disabled: $label"
 }
 
-# Enable a job by short ID
+# Enable a job by short ID or name
 enable_job_by_id() {
     validate_job_id "$1"
+    local id="$_resolved_id"
+    local name
+    name=$(get_job_name "$SYSTEMD_USER_DIR/${_job_name}.service")
+    local label
+    label=$(format_job_id "$id" "$name")
     if is_job_enabled "$_job_name"; then
-        echo "Already enabled: $1"
+        echo "Already enabled: $label"
         return
     fi
     enable_job "$_job_name"
-    echo "Enabled: $1"
+    echo "Enabled: $label"
 }
 
 # Get all managed unit files of a given type (service or timer)
@@ -251,7 +306,7 @@ get_managed_units() {
     done
 }
 
-# Build flags string from opt_notify and opt_email
+# Build flags string from opt_notify, opt_email, and opt_name
 build_flags_string() {
     local flags=""
     if $opt_notify; then
@@ -265,15 +320,20 @@ build_flags_string() {
         [[ -n "$flags" ]] && flags+=","
         flags+="e=$opt_email"
     fi
+    if [[ -n "$opt_name" ]]; then
+        [[ -n "$flags" ]] && flags+=","
+        flags+="n=$opt_name"
+    fi
     echo "$flags"
 }
 
-# Parse flags string into _notify_flag (bool) and _email_addr (string)
+# Parse flags string into _notify_flag (bool), _email_addr (string), _name (string)
 parse_flags() {
     local flags="$1"
     _notify_flag=false
     _email_addr=""
     _output_lines=""
+    _name=""
     IFS=',' read -ra parts <<< "$flags"
     for part in "${parts[@]}"; do
         case "$part" in
@@ -281,15 +341,18 @@ parse_flags() {
             o) _output_lines=10 ;;
             o=*) _output_lines="${part#o=}" ;;
             e=*) _email_addr="${part#e=}" ;;
+            n=*) _name="${part#n=}" ;;
         esac
     done
 }
 
 # Write ExecStopPost notification lines to a service file
-# Usage: write_notify_lines <short_id> <notify_flag> <email_addr> <file> [output_lines] [job_name]
+# Usage: write_notify_lines <short_id> <notify_flag> <email_addr> <file> [output_lines] [job_name] [display_name]
 write_notify_lines() {
     local short_id="$1" notify="$2" email="$3" file="$4"
-    local output_lines="${5-}" job_name="${6-}"
+    local output_lines="${5-}" job_name="${6-}" display_name="${7-}"
+    local job_label="$short_id"
+    [[ -n "$display_name" ]] && job_label="$short_id ($display_name)"
     local out_cmd=""
     if [[ -n "$output_lines" && -n "$job_name" ]]; then
         out_cmd="out=\$(journalctl --user SYSLOG_IDENTIFIER=$job_name -n $output_lines --no-pager -o cat); "
@@ -302,9 +365,9 @@ write_notify_lines() {
     if [[ "$notify" == true ]]; then
         local notify_cmd
         if [[ -n "$out_cmd" ]]; then
-            notify_cmd="${out_cmd}body=\$(printf \"Job $short_id: %%s\n%%s\" \"\$s\" \"\$out\"); notify-send -i \"\$icon\" \"systab\" \"\$body\" || true"
+            notify_cmd="${out_cmd}body=\$(printf \"Job $job_label: %%s\n%%s\" \"\$s\" \"\$out\"); notify-send -i \"\$icon\" \"systab\" \"\$body\" || true"
         else
-            notify_cmd="notify-send -i \"\$icon\" \"systab\" \"Job $short_id: \$s\" || true"
+            notify_cmd="notify-send -i \"\$icon\" \"systab\" \"Job $job_label: \$s\" || true"
         fi
         echo "ExecStopPost=/bin/sh -c '${icon_pre}${notify_cmd}'" >> "$file"
     fi
@@ -314,9 +377,9 @@ write_notify_lines() {
         [[ -n "$mailer" ]] || { warn "No sendmail or msmtp found, skipping email notification"; return; }
         local mail_cmd
         if [[ -n "$out_cmd" ]]; then
-            mail_cmd="${out_cmd}printf \"Subject: systab: $short_id %%s\\\\n\\\\n%%s at %%s\\\\n\\\\n%%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" \"\$out\" | $mailer $email"
+            mail_cmd="${out_cmd}printf \"Subject: systab: $job_label %%s\\\\n\\\\n%%s at %%s\\\\n\\\\n%%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" \"\$out\" | $mailer $email"
         else
-            mail_cmd="printf \"Subject: systab: $short_id %%s\\\\n\\\\n%%s at %%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" | $mailer $email"
+            mail_cmd="printf \"Subject: systab: $job_label %%s\\\\n\\\\n%%s at %%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" | $mailer $email"
         fi
         echo "ExecStopPost=/bin/sh -c '${status_pre}${mail_cmd}'" >> "$file"
     fi
@@ -352,7 +415,8 @@ EOF
     if [[ -n "$flags" ]]; then
         echo "# SYSTAB_FLAGS=$flags" >> "$service_file"
         parse_flags "$flags"
-        write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$job_name"
+        [[ -n "$_name" ]] && echo "# SYSTAB_NAME=$_name" >> "$service_file"
+        write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$job_name" "$_name"
     fi
 
     # Timer file
@@ -385,6 +449,19 @@ EOF
     _created_id="$short_id"
 }
 
+# Check that a job name is unique across all managed jobs
+check_name_unique() {
+    local name="$1"
+    [[ -d "$SYSTEMD_USER_DIR" ]] || return
+    local file
+    for file in "${SYSTEMD_USER_DIR}/${SCRIPT_NAME}"_*.service; do
+        [[ -f "$file" ]] || continue
+        if grep -q "^# SYSTAB_NAME=${name}$" "$file" 2>/dev/null; then
+            error "Job name '$name' is already in use"
+        fi
+    done
+}
+
 # Create a job from CLI options
 create_job() {
     local command_to_run
@@ -403,13 +480,20 @@ create_job() {
         [[ -n "$command_to_run" ]] || error "No command provided"
     fi
 
+    # Validate name uniqueness
+    if [[ -n "$opt_name" ]]; then
+        check_name_unique "$opt_name"
+    fi
+
     local time_spec
     time_spec=$(parse_time "$opt_time")
 
     _write_unit_files "$command_to_run" "$time_spec" "$(build_flags_string)"
     systemctl --user daemon-reload
 
-    echo "Job created: $_created_id"
+    local label
+    label=$(format_job_id "$_created_id" "$opt_name")
+    echo "Job created: $label"
     local job_name="${SCRIPT_NAME}_${_created_id}"
     echo "Next run: $(systemctl --user show "$job_name.timer" -p NextElapseUSecRealtime --value 2>/dev/null)"
 }
@@ -447,11 +531,12 @@ edit_jobs() {
 # Add a line with "new" as ID to create a job: new | daily | /path/to/cmd
 # Comment out a line to disable, uncomment to re-enable.
 #
-# Notification flags (append to ID with ':'): i = desktop, e=addr = email,
-#   o = include output (default 10 lines), o=N = include N lines of output
+# Flags (append to ID with ':'): i = desktop, e=addr = email,
+#   o = include output (default 10 lines), o=N = include N lines of output,
+#   n=name = human-readable name (usable in place of hex ID)
 #   a1b2c3:i | daily | cmd               desktop notification
 #   a1b2c3:i,o | daily | cmd             desktop with last 10 lines of output
-#   a1b2c3:i,o=5 | daily | cmd           desktop with last 5 lines of output
+#   a1b2c3:n=backup,i | daily | cmd      named job with desktop notification
 #   a1b2c3:e=user@host | daily | cmd      email notification
 #   a1b2c3:i,e=user@host | daily | cmd    both
 #
@@ -736,13 +821,14 @@ HEADER
 
             # Handle flags changes
             if [[ "$old_flags" != "$new_flags" && -f "$service_file" ]]; then
-                # Remove existing notification lines and flags comment
-                sed -i '/^ExecStopPost=/d; /^# SYSTAB_FLAGS=/d' "$service_file"
+                # Remove existing notification lines, flags comment, and name comment
+                sed -i '/^ExecStopPost=/d; /^# SYSTAB_FLAGS=/d; /^# SYSTAB_NAME=/d' "$service_file"
                 # Add new flags and notification lines
                 if [[ -n "$new_flags" ]]; then
                     echo "# SYSTAB_FLAGS=$new_flags" >> "$service_file"
                     parse_flags "$new_flags"
-                    write_notify_lines "$id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$jname"
+                    [[ -n "$_name" ]] && echo "# SYSTAB_NAME=$_name" >> "$service_file"
+                    write_notify_lines "$id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$jname" "$_name"
                 fi
             fi
 
@@ -771,7 +857,8 @@ HEADER
 build_job_list() {
     _job_list=()
     if [[ -n "$opt_jobid" ]]; then
-        _job_list+=("${SCRIPT_NAME}_${opt_jobid}")
+        resolve_job_id "$opt_jobid"
+        _job_list+=("${SCRIPT_NAME}_${_resolved_id}")
     else
         local job
         while IFS= read -r job; do
@@ -798,7 +885,11 @@ show_status() {
         local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
         local service_file="$SYSTEMD_USER_DIR/${job}.service"
 
-        echo "Job: $(job_id "$job")"
+        local id name label
+        id=$(job_id "$job")
+        name=$(get_job_name "$SYSTEMD_USER_DIR/${job}.service")
+        label=$(format_job_id "$id" "$name")
+        echo "Job: $label"
 
         # Get schedule from timer file
         if [[ -f "$timer_file" ]]; then
@@ -871,7 +962,11 @@ list_logs() {
     [[ -n "$opt_filter" ]] && grep_args=(--grep "$opt_filter")
 
     for job in "${_job_list[@]}"; do
-        echo "=== Logs for $(job_id "$job") ==="
+        local id name label
+        id=$(job_id "$job")
+        name=$(get_job_name "$SYSTEMD_USER_DIR/${job}.service")
+        label=$(format_job_id "$id" "$name")
+        echo "=== Logs for $label ==="
 
         if systemctl --user is-active "${job}.timer" &>/dev/null; then
             echo "Status: Active"
@@ -929,11 +1024,12 @@ clean_jobs() {
 
 # Parse command-line options
 parse_options() {
-    while getopts "t:c:f:im:oD:E:eLSCh" opt; do
+    while getopts "t:c:f:n:im:oD:E:eLSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             c) opt_command="$OPTARG" ;;
             f) opt_file="$OPTARG" ;;
+            n) opt_name="$OPTARG" ;;
             i) opt_notify=true ;;
             m) opt_email="$OPTARG" ;;
             o) # Optional argument: peek at next arg for a number
@@ -962,8 +1058,8 @@ parse_options() {
     # Check for trailing arguments after -S or -L
     if ($opt_list || $opt_status) && [[ $OPTIND -le $# ]]; then
         local trailing="${!OPTIND}"
-        # If it looks like a job ID and the job exists, use as job filter
-        if [[ "$trailing" =~ ^[0-9a-f]{6}$ ]] && [[ -f "$SYSTEMD_USER_DIR/${SCRIPT_NAME}_${trailing}.timer" ]]; then
+        # Try to resolve as job ID or name (run in subshell to catch error exit)
+        if (resolve_job_id "$trailing") 2>/dev/null; then
             opt_jobid="$trailing"
             # For -L, check for a second trailing arg as text filter
             if $opt_list; then
@@ -973,13 +1069,20 @@ parse_options() {
                 fi
             fi
         elif $opt_list; then
-            # Not a job ID — treat as text filter for backward compatibility
+            # Not a job ID or name — treat as text filter for backward compatibility
             opt_filter="$trailing"
         else
-            error "No job found with ID: $trailing"
+            error "No job found with ID or name: $trailing"
         fi
     fi
     
+    # Validate name format
+    if [[ -n "$opt_name" ]]; then
+        if [[ "$opt_name" =~ [[:space:]|:] ]]; then
+            error "Job name must not contain whitespace, pipes, or colons"
+        fi
+    fi
+
     # Validate mutually exclusive options
     local manage_count=0
     [[ -n "$opt_disable" ]] && manage_count=$((manage_count + 1))

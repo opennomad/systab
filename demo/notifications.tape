@@ -54,7 +54,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -t 'every day at 9am' -c '/home/user/backup.sh' -i -m admin@example.com"
+Type "systab -t 'every day at 9am' -n backup -c '/home/user/backup.sh' -i -m admin@example.com"
 Sleep 500ms
 Enter
 Sleep 2s
