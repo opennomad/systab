@@ -2,6 +2,19 @@
 
 A cron/at-like interface for systemd user timers. Create, manage, and monitor scheduled jobs without writing unit files by hand.
 
+<table>
+<tr>
+<td width="33%"><img src="demo/quickstart.gif" alt="Quick start demo"></td>
+<td width="33%"><img src="demo/editmode.gif" alt="Edit mode demo"></td>
+<td width="33%"><img src="demo/notifications.gif" alt="Notifications demo"></td>
+</tr>
+<tr>
+<td align="center"><b>Quick start</b></td>
+<td align="center"><b>Edit mode</b></td>
+<td align="center"><b>Notifications</b></td>
+</tr>
+</table>
+
 ## Install
 
 Copy the `systab` script somewhere on your `$PATH`:
