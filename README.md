@@ -82,7 +82,7 @@ systab -t "every day at 6am" -c "df -h" -i -o
 
 ```bash
 # Edit all jobs in your $EDITOR (crontab-style)
-systab -E
+systab -e
 
 # Show status of all jobs
 systab -S
@@ -99,11 +99,11 @@ systab -L a1b2c3
 # View logs (filtered)
 systab -L error
 
-# Pause a job
-systab -P <id>
+# Disable a job
+systab -D <id>
 
-# Resume a paused job
-systab -R <id>
+# Enable a disabled job
+systab -E <id>
 
 # Clean up completed one-time jobs
 systab -C
@@ -111,24 +111,24 @@ systab -C
 
 ### Edit mode
 
-`systab -E` opens your editor with a pipe-delimited job list:
+`systab -e` opens your editor with a pipe-delimited job list:
 
 ```
 a1b2c3 | daily | /home/user/backup.sh
 d4e5f6:i | *:0/15 | curl -s https://example.com
 g7h8i9:e=user@host | weekly | ~/backup.sh
-# aabbcc | hourly | echo "this job is paused"
+# aabbcc | hourly | echo "this job is disabled"
 ```
 
 - Edit the schedule or command to update a job
 - Delete a line to remove a job
 - Add a line with `new` as the ID to create a job: `new | every 5 minutes | echo hello`
-- Comment out a line (`#`) to pause, uncomment to resume
+- Comment out a line (`#`) to disable, uncomment to enable
 - Append notification flags after the ID with `:` — `i` for desktop, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:i,o,e=user@host`)
 
 ### Job IDs
 
-Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. Use this ID with `-P`, `-R`, and `-L`.
+Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. Use this ID with `-D`, `-E`, and `-L`.
 
 ## How it works
 
@@ -148,9 +148,9 @@ Job Creation:
   -o [lines]        Include job output in notifications (default: 10 lines)
 
 Management:
-  -P <id>           Pause (disable) a job
-  -R <id>           Resume (enable) a paused job
-  -E                Edit jobs in crontab-like format
+  -D <id>           Disable a job
+  -E <id>           Enable a disabled job
+  -e                Edit jobs in crontab-like format
   -L [id] [filter]  List job logs (optionally for a specific job and/or filtered)
   -S [id]           Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs

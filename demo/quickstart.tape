@@ -69,21 +69,21 @@ Sleep 3s
 Type "q"
 Sleep 1s
 
-# Pause a job (uses the first job ID from status)
+# Disable a job (uses the first job ID from status)
 Hide
-Type "./demo/note.sh 'Pausing a job'"
+Type "./demo/note.sh 'Disabling a job'"
 Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -P $(systab -S 2>/dev/null | grep -m1 'Job:' | awk '{print $2}')"
+Type "systab -D $(systab -S 2>/dev/null | grep -m1 'Job:' | awk '{print $2}')"
 Sleep 500ms
 Enter
 Sleep 2s
 
-# Show it's paused
+# Show it's disabled
 Hide
-Type "./demo/note.sh 'Verifying job is paused'"
+Type "./demo/note.sh 'Verifying job is disabled'"
 Enter
 Sleep 500ms
 Show
@@ -98,14 +98,14 @@ Sleep 3s
 Type "q"
 Sleep 1s
 
-# Resume it
+# Enable it
 Hide
-Type "./demo/note.sh 'Resuming the paused job'"
+Type "./demo/note.sh 'Enabling the disabled job'"
 Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -R $(systab -S 2>/dev/null | grep -m1 'Disabled' -B4 | grep 'Job:' | awk '{print $2}')"
+Type "systab -E $(systab -S 2>/dev/null | grep -m1 'Disabled' -B4 | grep 'Job:' | awk '{print $2}')"
 Sleep 500ms
 Enter
 Sleep 2s

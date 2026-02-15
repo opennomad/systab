@@ -166,21 +166,21 @@ assert_output "view logs all" "Logs for" $SYSTAB -L
 assert_output "view logs single job" "$id_recurring" $SYSTAB -L "$id_recurring"
 
 # ============================================================
-# Pause / Resume
+# Disable / Enable
 # ============================================================
 
 echo ""
-echo "${BOLD}--- Pause / Resume ---${RESET}"
+echo "${BOLD}--- Disable / Enable ---${RESET}"
 
-assert_output "pause job" "Paused:" $SYSTAB -P "$id_recurring"
+assert_output "disable job" "Disabled:" $SYSTAB -D "$id_recurring"
 
-assert_output "show paused state" "Disabled" $SYSTAB -S "$id_recurring"
+assert_output "show disabled state" "Disabled" $SYSTAB -S "$id_recurring"
 
-assert_output "pause already paused" "Already paused:" $SYSTAB -P "$id_recurring"
+assert_output "disable already disabled" "Already disabled:" $SYSTAB -D "$id_recurring"
 
-assert_output "resume job" "Resumed:" $SYSTAB -R "$id_recurring"
+assert_output "enable job" "Enabled:" $SYSTAB -E "$id_recurring"
 
-assert_output "resume already running" "Already running:" $SYSTAB -R "$id_recurring"
+assert_output "enable already enabled" "Already enabled:" $SYSTAB -E "$id_recurring"
 
 # ============================================================
 # Notifications
@@ -280,8 +280,8 @@ echo "${BOLD}--- Error cases ---${RESET}"
 
 assert_failure "missing -t" $SYSTAB -c "echo hello"
 assert_failure "-c and -f together" $SYSTAB -t "daily" -c "echo hello" -f /nonexistent
-assert_failure "invalid job ID for -P" $SYSTAB -P "zzzzzz"
-assert_failure "invalid job ID for -R" $SYSTAB -R "zzzzzz"
+assert_failure "invalid job ID for -D" $SYSTAB -D "zzzzzz"
+assert_failure "invalid job ID for -E" $SYSTAB -E "zzzzzz"
 
 # -o without -i or -m: should succeed (flag accepted, just no notification lines)
 assert_output "-o without -i/-m creates job" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo bare_output" -o

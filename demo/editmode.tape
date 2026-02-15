@@ -32,7 +32,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "EDITOR=nano systab -E"
+Type "EDITOR=nano systab -e"
 Sleep 500ms
 Enter
 Sleep 3s
@@ -83,7 +83,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "EDITOR=nano systab -E"
+Type "EDITOR=nano systab -e"
 Sleep 500ms
 Enter
 Sleep 3s

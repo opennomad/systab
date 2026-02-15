@@ -20,14 +20,14 @@ The script has two modes controlled by CLI flags:
 
 - **Job creation** (`-t <time> [-c <cmd> | -f <script> | stdin]`): Generates a systemd `.service` + `.timer` pair with a 6-char hex short ID, reloads the daemon, and enables/starts the timer. Time specs are parsed via `parse_time` which handles natural language (`every 5 minutes`), `date -d` relative/absolute times, and raw systemd OnCalendar values. One-time jobs get `Persistent=false` and `RemainAfterElapse=no` (auto-unload after firing). All jobs log stdout/stderr to the journal via `SyslogIdentifier`. Notifications (`-i` desktop, `-m` email, `-o` include output) use `ExecStopPost` so they fire on both success and failure with status-aware icons/messages. The `-o [N]` flag fetches the last N lines of journal output (default 10) and includes them in the notification body (also configurable in edit mode as `o` or `o=N`). Notification flags are persisted in the service file as a `# SYSTAB_FLAGS=` comment.
 
-- **Management** (`-P`, `-R`, `-E`, `-L`, `-S`, `-C`, `-h` — mutually exclusive):
-  - `-P <id>` / `-R <id>`: Pause (stop+disable) or resume (enable+start) a job's timer.
-  - `-E`: Opens `$EDITOR` with a pipe-separated crontab (`ID[:FLAGS] | SCHEDULE | COMMAND`). Notification flags are appended to the ID with `:` (`i` = desktop, `e=addr` = email, `o` = output 10 lines, `o=N` = output N lines, comma-separated). On save, diffs against the original to apply creates (ID=`new`), deletes (removed lines), updates (changed schedule/command/flags), and pause/resume (comment/uncomment lines).
+- **Management** (`-D`, `-E`, `-e`, `-L`, `-S`, `-C`, `-h` — mutually exclusive):
+  - `-D <id>` / `-E <id>`: Disable (stop+disable) or enable (enable+start) a job's timer.
+  - `-e`: Opens `$EDITOR` with a pipe-separated crontab (`ID[:FLAGS] | SCHEDULE | COMMAND`). Notification flags are appended to the ID with `:` (`i` = desktop, `e=addr` = email, `o` = output 10 lines, `o=N` = output N lines, comma-separated). On save, diffs against the original to apply creates (ID=`new`), deletes (removed lines), updates (changed schedule/command/flags), and disable/enable (comment/uncomment lines).
   - `-L [id] [filter]`: Query `journalctl` logs for managed jobs (both unit messages and command output). Optional job ID to filter to a single job.
   - `-S [id]`: Show timer status via `systemctl`, including short IDs and disabled state. Optional job ID to show a single job.
   - `-C`: Interactively clean up elapsed one-time timers (removes unit files from disk).
 
-Key functions: `parse_time` (time spec → OnCalendar), `_write_unit_files` (shared service+timer creation), `create_job`/`create_job_from_edit` (thin wrappers), `edit_jobs` (crontab-style edit with diff-and-apply), `get_managed_units` (find tagged units by type), `clean_jobs` (remove elapsed one-time timers), `pause_job`/`resume_job` (disable/enable timers), `write_notify_lines` (append `ExecStopPost` notification lines), `build_flags_string`/`parse_flags` (convert between CLI options and flags format).
+Key functions: `parse_time` (time spec → OnCalendar), `_write_unit_files` (shared service+timer creation), `create_job`/`create_job_from_edit` (thin wrappers), `edit_jobs` (crontab-style edit with diff-and-apply), `get_managed_units` (find tagged units by type), `clean_jobs` (remove elapsed one-time timers), `disable_job_by_id`/`enable_job_by_id` (disable/enable timers), `write_notify_lines` (append `ExecStopPost` notification lines), `build_flags_string`/`parse_flags` (convert between CLI options and flags format).
 
 ## Testing
 
@@ -35,7 +35,7 @@ Key functions: `parse_time` (time spec → OnCalendar), `_write_unit_files` (sha
 ./test.sh
 ```
 
-Runs 44 tests against real systemd user timers covering job creation, status, logs, pause/resume, notifications, time format parsing, error cases, and cleanup. All test jobs are cleaned up automatically via trap.
+Runs 44 tests against real systemd user timers covering job creation, status, logs, disable/enable, notifications, time format parsing, error cases, and cleanup. All test jobs are cleaned up automatically via trap.
 
 ## Notes
 

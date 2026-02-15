@@ -18,8 +18,8 @@ opt_edit=false
 opt_list=false
 opt_clean=false
 opt_status=false
-opt_pause=""
-opt_resume=""
+opt_disable=""
+opt_enable=""
 opt_filter=""
 opt_output=""
 opt_jobid=""
@@ -39,9 +39,9 @@ Job Creation Options:
   -o [lines]        Include job output in notifications (default: 10 lines)
 
 Management Options:
-  -P <id>           Pause (disable) a job
-  -R <id>           Resume (enable) a paused job
-  -E                Edit jobs in crontab-like format
+  -D <id>           Disable a job
+  -E <id>           Enable a disabled job
+  -e                Edit jobs in crontab-like format
   -L [id] [filter]  List job logs (optionally for a specific job and/or filtered)
   -S [id]           Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs
@@ -69,11 +69,11 @@ EXAMPLES:
   echo "ls -la" | $SCRIPT_NAME -t "next monday at 9am"
 
   # Edit existing jobs (supports adding notifications via ID:flags syntax)
-  $SCRIPT_NAME -E
+  $SCRIPT_NAME -e
 
-  # Pause and resume a job
-  $SCRIPT_NAME -P <id>
-  $SCRIPT_NAME -R <id>
+  # Disable and enable a job
+  $SCRIPT_NAME -D <id>
+  $SCRIPT_NAME -E <id>
 
   # View logs for backup jobs
   $SCRIPT_NAME -L backup
@@ -218,26 +218,26 @@ validate_job_id() {
     grep -q "^$MARKER" "$timer_file" 2>/dev/null || error "Not a managed job: $id"
 }
 
-# Pause a job by short ID
-pause_job() {
+# Disable a job by short ID
+disable_job_by_id() {
     validate_job_id "$1"
     if ! is_job_enabled "$_job_name"; then
-        echo "Already paused: $1"
+        echo "Already disabled: $1"
         return
     fi
     disable_job "$_job_name"
-    echo "Paused: $1"
+    echo "Disabled: $1"
 }
 
-# Resume a job by short ID
-resume_job() {
+# Enable a job by short ID
+enable_job_by_id() {
     validate_job_id "$1"
     if is_job_enabled "$_job_name"; then
-        echo "Already running: $1"
+        echo "Already enabled: $1"
         return
     fi
     enable_job "$_job_name"
-    echo "Resumed: $1"
+    echo "Enabled: $1"
 }
 
 # Get all managed unit files of a given type (service or timer)
@@ -929,7 +929,7 @@ clean_jobs() {
 
 # Parse command-line options
 parse_options() {
-    while getopts "t:c:f:im:oP:R:ELSCh" opt; do
+    while getopts "t:c:f:im:oD:E:eLSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             c) opt_command="$OPTARG" ;;
@@ -948,9 +948,9 @@ parse_options() {
                 else
                     opt_output=10
                 fi ;;
-            P) opt_pause="$OPTARG" ;;
-            R) opt_resume="$OPTARG" ;;
-            E) opt_edit=true ;;
+            D) opt_disable="$OPTARG" ;;
+            E) opt_enable="$OPTARG" ;;
+            e) opt_edit=true ;;
             L) opt_list=true ;;
             S) opt_status=true ;;
             C) opt_clean=true ;;
@@ -982,19 +982,19 @@ parse_options() {
     
     # Validate mutually exclusive options
     local manage_count=0
-    [[ -n "$opt_pause" ]] && manage_count=$((manage_count + 1))
-    [[ -n "$opt_resume" ]] && manage_count=$((manage_count + 1))
+    [[ -n "$opt_disable" ]] && manage_count=$((manage_count + 1))
+    [[ -n "$opt_enable" ]] && manage_count=$((manage_count + 1))
     $opt_edit && manage_count=$((manage_count + 1))
     $opt_list && manage_count=$((manage_count + 1))
     $opt_status && manage_count=$((manage_count + 1))
     $opt_clean && manage_count=$((manage_count + 1))
 
     if [[ $manage_count -gt 1 ]]; then
-        error "Options -P, -R, -E, -L, -S, and -C are mutually exclusive"
+        error "Options -D, -E, -e, -L, -S, and -C are mutually exclusive"
     fi
 
     if [[ $manage_count -gt 0 && -n "$opt_time$opt_command$opt_file" ]]; then
-        error "Management options -P, -R, -E, -L, -S, and -C cannot be used with job creation options"
+        error "Management options -D, -E, -e, -L, -S, and -C cannot be used with job creation options"
     fi
     
     if [[ -n "$opt_command" && -n "$opt_file" ]]; then
@@ -1012,10 +1012,10 @@ main() {
     parse_options "$@"
     
     # Determine mode based on options
-    if [[ -n "$opt_pause" ]]; then
-        pause_job "$opt_pause"
-    elif [[ -n "$opt_resume" ]]; then
-        resume_job "$opt_resume"
+    if [[ -n "$opt_disable" ]]; then
+        disable_job_by_id "$opt_disable"
+    elif [[ -n "$opt_enable" ]]; then
+        enable_job_by_id "$opt_enable"
     elif $opt_edit; then
         edit_jobs
     elif $opt_list; then
