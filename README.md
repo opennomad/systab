@@ -75,7 +75,7 @@ systab -t "in 1 hour" -c "make build" -i
 systab -t "every day at 6am" -c "df -h" -m user@example.com
 
 # Include last 10 lines of output in notification
-systab -t "every day at 6am" -c "df -h" -i -o 10
+systab -t "every day at 6am" -c "df -h" -i -o
 ```
 
 ### Managing jobs
@@ -145,7 +145,7 @@ Job Creation:
   -f <script>       Script file to execute (reads stdin if neither -c nor -f)
   -i                Send desktop notification on completion (success/failure)
   -m <email>        Send email notification to address (via sendmail)
-  -o <lines>        Include last N lines of job output in notifications (default: 10)
+  -o [lines]        Include job output in notifications (default: 10 lines)
 
 Management:
   -P <id>           Pause (disable) a job

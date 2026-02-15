@@ -36,7 +36,7 @@ Job Creation Options:
   -f <script>       Script file to execute
   -i                Send desktop notification on completion (success/failure)
   -m <email>        Send email notification to address (via sendmail)
-  -o <lines>        Include last N lines of job output in notifications (default: 10)
+  -o [lines]        Include job output in notifications (default: 10 lines)
 
 Management Options:
   -P <id>           Pause (disable) a job
@@ -291,30 +291,31 @@ write_notify_lines() {
     if [[ -n "$output_lines" && -n "$job_name" ]]; then
         out_cmd="out=\$(journalctl --user SYSLOG_IDENTIFIER=$job_name -n $output_lines --no-pager -o cat); "
     fi
+    # Common status preamble shared by all notification lines (intentionally unexpanded)
+    # shellcheck disable=SC2016
+    local icon_pre='if [ "$SERVICE_RESULT" = success ]; then icon=dialog-information; s=completed; else icon=dialog-error; s="failed ($EXIT_STATUS)"; fi; '
+    # shellcheck disable=SC2016
+    local status_pre='if [ "$SERVICE_RESULT" = success ]; then s=completed; else s="failed ($EXIT_STATUS)"; fi; '
     if [[ "$notify" == true ]]; then
+        local notify_cmd
         if [[ -n "$out_cmd" ]]; then
-            cat >> "$file" <<EOF
-ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then icon=dialog-information; s=completed; else icon=dialog-error; s="failed (\$EXIT_STATUS)"; fi; ${out_cmd}body=\$(printf "Job $short_id: %%s\n%%s" "\$s" "\$out"); notify-send -i "\$icon" "systab" "\$body" || true'
-EOF
+            notify_cmd="${out_cmd}body=\$(printf \"Job $short_id: %%s\n%%s\" \"\$s\" \"\$out\"); notify-send -i \"\$icon\" \"systab\" \"\$body\" || true"
         else
-            cat >> "$file" <<EOF
-ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then icon=dialog-information; s=completed; else icon=dialog-error; s="failed (\$EXIT_STATUS)"; fi; notify-send -i "\$icon" "systab" "Job $short_id: \$s" || true'
-EOF
+            notify_cmd="notify-send -i \"\$icon\" \"systab\" \"Job $short_id: \$s\" || true"
         fi
+        echo "ExecStopPost=/bin/sh -c '${icon_pre}${notify_cmd}'" >> "$file"
     fi
     if [[ -n "$email" ]]; then
         local mailer
         mailer=$(command -v sendmail || command -v msmtp || true)
         [[ -n "$mailer" ]] || { warn "No sendmail or msmtp found, skipping email notification"; return; }
+        local mail_cmd
         if [[ -n "$out_cmd" ]]; then
-            cat >> "$file" <<EOF
-ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; ${out_cmd}printf "Subject: systab: $short_id %%s\\n\\n%%s at %%s\\n\\n%%s\\n" "\$s" "\$s" "\$(date)" "\$out" | $mailer $email'
-EOF
+            mail_cmd="${out_cmd}printf \"Subject: systab: $short_id %%s\\\\n\\\\n%%s at %%s\\\\n\\\\n%%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" \"\$out\" | $mailer $email"
         else
-            cat >> "$file" <<EOF
-ExecStopPost=/bin/sh -c 'if [ "\$SERVICE_RESULT" = success ]; then s=completed; else s="failed (\$EXIT_STATUS)"; fi; printf "Subject: systab: $short_id %%s\\n\\n%%s at %%s\\n" "\$s" "\$s" "\$(date)" | $mailer $email'
-EOF
+            mail_cmd="printf \"Subject: systab: $short_id %%s\\\\n\\\\n%%s at %%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" | $mailer $email"
         fi
+        echo "ExecStopPost=/bin/sh -c '${status_pre}${mail_cmd}'" >> "$file"
     fi
 }
 
@@ -407,7 +408,7 @@ create_job() {
 
     echo "Job created: $_created_id"
     local job_name="${SCRIPT_NAME}_${_created_id}"
-    echo "Next run: $(systemctl --user list-timers "$job_name.timer" --no-pager | tail -n 2 | head -n 1 | awk '{print $1, $2, $3}')"
+    echo "Next run: $(systemctl --user show "$job_name.timer" -p NextElapseUSecRealtime --value 2>/dev/null)"
 }
 
 # Remove a managed job (stop, disable, delete unit files)
@@ -718,8 +719,7 @@ HEADER
 
                 # Update one-time vs recurring settings
                 if is_recurring "$new_sched"; then
-                    sed -i '/^Persistent=false$/d' "$timer_file"
-                    sed -i '/^RemainAfterElapse=no$/d' "$timer_file"
+                    sed -i '/^Persistent=false$/d; /^RemainAfterElapse=no$/d' "$timer_file"
                 else
                     if ! grep -q "^Persistent=false" "$timer_file"; then
                         sed -i "/^OnCalendar=/a Persistent=false\nRemainAfterElapse=no" "$timer_file"
@@ -734,8 +734,7 @@ HEADER
             # Handle flags changes
             if [[ "$old_flags" != "$new_flags" && -f "$service_file" ]]; then
                 # Remove existing notification lines and flags comment
-                sed -i '/^ExecStopPost=/d' "$service_file"
-                sed -i '/^# SYSTAB_FLAGS=/d' "$service_file"
+                sed -i '/^ExecStopPost=/d; /^# SYSTAB_FLAGS=/d' "$service_file"
                 # Add new flags and notification lines
                 if [[ -n "$new_flags" ]]; then
                     echo "# SYSTAB_FLAGS=$new_flags" >> "$service_file"
@@ -763,36 +762,41 @@ HEADER
     echo "Summary: $created created, $updated updated, $deleted deleted, $enabled enabled, $disabled disabled"
 }
 
-# Show status of all managed jobs (or a single job if opt_jobid is set)
-show_status() {
-    local job
-    local job_list=()
-
+# Build a job list from opt_jobid (single job) or get_managed_units (all jobs)
+# Usage: build_job_list <unit_type>
+# Sets _job_list array; returns 1 if empty
+build_job_list() {
+    _job_list=()
     if [[ -n "$opt_jobid" ]]; then
-        job_list+=("${SCRIPT_NAME}_${opt_jobid}")
+        _job_list+=("${SCRIPT_NAME}_${opt_jobid}")
     else
+        local job
         while IFS= read -r job; do
             [[ -z "$job" ]] && continue
-            job_list+=("$job")
-        done < <(get_managed_units timer)
+            _job_list+=("$job")
+        done < <(get_managed_units "$1")
     fi
-
-    if [[ ${#job_list[@]} -eq 0 ]]; then
+    if [[ ${#_job_list[@]} -eq 0 ]]; then
         echo "No managed jobs found."
-        return
+        return 1
     fi
+}
 
-    local count=${#job_list[@]}
+# Show status of all managed jobs (or a single job if opt_jobid is set)
+show_status() {
+    build_job_list timer || return
+
+    local count=${#_job_list[@]}
     echo "Managed Jobs Status - $count total"
     echo "=========================================="
     echo ""
     
-    for job in "${job_list[@]}"; do
+    for job in "${_job_list[@]}"; do
         local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
         local service_file="$SYSTEMD_USER_DIR/${job}.service"
 
         echo "Job: $(job_id "$job")"
-        
+
         # Get schedule from timer file
         if [[ -f "$timer_file" ]]; then
             local schedule
@@ -820,13 +824,11 @@ show_status() {
         elif systemctl --user is-active "${job}.timer" &>/dev/null; then
             echo "  Timer: Active"
 
-            local timer_line
-            timer_line=$(systemctl --user list-timers "${job}.timer" --no-pager 2>/dev/null | tail -n 2 | head -n 1)
             local next_run last_run
-            next_run=$(awk '{print $1, $2, $3, $4, $5}' <<< "$timer_line")
-            last_run=$(awk '{for(i=6;i<=10;i++) printf $i" "; print ""}' <<< "$timer_line")
+            next_run=$(systemctl --user show "${job}.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
+            last_run=$(systemctl --user show "${job}.timer" -p LastTriggerUSec --value 2>/dev/null)
             [[ -n "$next_run" ]] && echo "  Next run: $next_run"
-            [[ -n "$last_run" && "$last_run" != "n/a "* ]] && echo "  Last run: $last_run"
+            [[ -n "$last_run" ]] && echo "  Last run: $last_run"
         else
             echo "  Timer: Inactive/Completed"
         fi
@@ -857,30 +859,15 @@ show_status() {
 
 # List logs (or logs for a single job if opt_jobid is set)
 list_logs() {
-    local job
-    local job_list=()
+    build_job_list service || return
 
-    if [[ -n "$opt_jobid" ]]; then
-        job_list+=("${SCRIPT_NAME}_${opt_jobid}")
-    else
-        while IFS= read -r job; do
-            [[ -z "$job" ]] && continue
-            job_list+=("$job")
-        done < <(get_managed_units service)
-    fi
-
-    if [[ ${#job_list[@]} -eq 0 ]]; then
-        echo "No managed jobs found."
-        return
-    fi
-
-    echo "Found ${#job_list[@]} managed jobs"
+    echo "Found ${#_job_list[@]} managed jobs"
     echo ""
 
     local grep_args=()
     [[ -n "$opt_filter" ]] && grep_args=(--grep "$opt_filter")
 
-    for job in "${job_list[@]}"; do
+    for job in "${_job_list[@]}"; do
         echo "=== Logs for $(job_id "$job") ==="
 
         if systemctl --user is-active "${job}.timer" &>/dev/null; then
@@ -921,9 +908,7 @@ clean_jobs() {
                 read -p "Remove completed job '$job' (command: $command)? [y/N] " -n 1 -r </dev/tty
                 echo
                 if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    systemctl --user stop "${job}.timer" 2>/dev/null || true
-                    systemctl --user disable "${job}.timer" 2>/dev/null || true
-                    rm -f "$SYSTEMD_USER_DIR/${job}.service" "$SYSTEMD_USER_DIR/${job}.timer"
+                    remove_job "$job"
                     echo "Removed: $job"
                     cleaned=$((cleaned + 1))
                 fi
@@ -941,14 +926,25 @@ clean_jobs() {
 
 # Parse command-line options
 parse_options() {
-    while getopts "t:c:f:im:o:P:R:ELSCh" opt; do
+    while getopts "t:c:f:im:oP:R:ELSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             c) opt_command="$OPTARG" ;;
             f) opt_file="$OPTARG" ;;
             i) opt_notify=true ;;
             m) opt_email="$OPTARG" ;;
-            o) opt_output="$OPTARG" ;;
+            o) # Optional argument: peek at next arg for a number
+                if [[ $OPTIND -le $# ]]; then
+                    local next="${!OPTIND}"
+                    if [[ "$next" =~ ^[0-9]+$ ]]; then
+                        opt_output="$next"
+                        OPTIND=$((OPTIND + 1))
+                    else
+                        opt_output=10
+                    fi
+                else
+                    opt_output=10
+                fi ;;
             P) opt_pause="$OPTARG" ;;
             R) opt_resume="$OPTARG" ;;
             E) opt_edit=true ;;
@@ -1003,12 +999,7 @@ parse_options() {
     fi
     
     # Validate create mode requirements
-    local is_manage_mode=false
-    if [[ -n "$opt_pause$opt_resume" ]] || $opt_edit || $opt_list || $opt_status || $opt_clean; then
-        is_manage_mode=true
-    fi
-    
-    if ! $is_manage_mode; then
+    if [[ $manage_count -eq 0 ]]; then
         [[ -n "$opt_time" ]] || error "Option -t is required for job creation"
     fi
 }

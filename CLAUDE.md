@@ -18,9 +18,9 @@ No build step. The script requires `bash`, `systemctl`, and optionally `notify-s
 
 The script has two modes controlled by CLI flags:
 
-- **Job creation** (`-t <time> [-c <cmd> | -f <script> | stdin]`): Generates a systemd `.service` + `.timer` pair with a 6-char hex short ID, reloads the daemon, and enables/starts the timer. Time specs are parsed via `parse_time` which handles natural language (`every 5 minutes`), `date -d` relative/absolute times, and raw systemd OnCalendar values. One-time jobs get `Persistent=false` and `RemainAfterElapse=no` (auto-unload after firing). All jobs log stdout/stderr to the journal via `SyslogIdentifier`. Notifications (`-i` desktop, `-m` email, `-o <lines>` include output) use `ExecStopPost` so they fire on both success and failure with status-aware icons/messages. The `-o` flag fetches the last N lines of journal output (default 10) and includes them in the notification body. Notification flags are persisted in the service file as a `# SYSTAB_FLAGS=` comment.
+- **Job creation** (`-t <time> [-c <cmd> | -f <script> | stdin]`): Generates a systemd `.service` + `.timer` pair with a 6-char hex short ID, reloads the daemon, and enables/starts the timer. Time specs are parsed via `parse_time` which handles natural language (`every 5 minutes`), `date -d` relative/absolute times, and raw systemd OnCalendar values. One-time jobs get `Persistent=false` and `RemainAfterElapse=no` (auto-unload after firing). All jobs log stdout/stderr to the journal via `SyslogIdentifier`. Notifications (`-i` desktop, `-m` email, `-o` include output) use `ExecStopPost` so they fire on both success and failure with status-aware icons/messages. The `-o [N]` flag fetches the last N lines of journal output (default 10) and includes them in the notification body (also configurable in edit mode as `o` or `o=N`). Notification flags are persisted in the service file as a `# SYSTAB_FLAGS=` comment.
 
-- **Management** (`-P`, `-R`, `-E`, `-L`, `-S`, `-C` — mutually exclusive):
+- **Management** (`-P`, `-R`, `-E`, `-L`, `-S`, `-C`, `-h` — mutually exclusive):
   - `-P <id>` / `-R <id>`: Pause (stop+disable) or resume (enable+start) a job's timer.
   - `-E`: Opens `$EDITOR` with a pipe-separated crontab (`ID[:FLAGS] | SCHEDULE | COMMAND`). Notification flags are appended to the ID with `:` (`i` = desktop, `e=addr` = email, `o` = output 10 lines, `o=N` = output N lines, comma-separated). On save, diffs against the original to apply creates (ID=`new`), deletes (removed lines), updates (changed schedule/command/flags), and pause/resume (comment/uncomment lines).
   - `-L [id] [filter]`: Query `journalctl` logs for managed jobs (both unit messages and command output). Optional job ID to filter to a single job.
@@ -45,5 +45,5 @@ There are no automated tests. Test manually with systemd user timers:
 
 - ShellCheck can be used for linting: `shellcheck systab`.
 - Edit mode uses `|` as the field delimiter (not tabs or spaces) to allow multi-word schedules. Notification flags use `:` after the ID (e.g., `a1b2c3:i,o,e=user@host`).
-- Notification flags are persisted as `# SYSTAB_FLAGS=...` comments in service files and as `ExecStopPost=` lines using `$SERVICE_RESULT`/`$EXIT_STATUS` for status-aware messages.
+- Notification flags (`i` = desktop, `o`/`o=N` = include output, `e=addr` = email) are persisted as `# SYSTAB_FLAGS=...` comments in service files and as `ExecStopPost=` lines using `$SERVICE_RESULT`/`$EXIT_STATUS` for status-aware messages. Unit file `printf` format strings must use `%%s` (not `%s`) since systemd expands `%s` as a specifier before the shell runs.
 - Journal logs are queried with `USER_UNIT` OR `SYSLOG_IDENTIFIER` to capture both systemd messages and command output.
