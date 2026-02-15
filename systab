@@ -158,8 +158,11 @@ parse_time() {
     fi
 
     # Try to parse with date command (one-time specs)
+    # Strip "in " prefix for natural phrasing ("in 5 minutes" → "5 minutes")
+    local date_spec="$time_spec"
+    [[ "${date_spec,,}" == in\ * ]] && date_spec="${date_spec:3}"
     local parsed_date
-    if parsed_date=$(date -d "$time_spec" '+%Y-%m-%d %H:%M:%S' 2>/dev/null); then
+    if parsed_date=$(date -d "$date_spec" '+%Y-%m-%d %H:%M:%S' 2>/dev/null); then
         echo "$parsed_date"
         return
     fi
