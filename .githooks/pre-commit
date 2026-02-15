@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+badge_file="badges/tests.json"
+
+write_badge() {
+    local status="$1" color="$2"
+    mkdir -p badges
+    cat > "$badge_file" <<EOF
+{
+  "schemaVersion": 1,
+  "label": "tests",
+  "message": "$status",
+  "color": "$color"
+}
+EOF
+    git add "$badge_file"
+}
+
+echo "Running ShellCheck..."
+if ! shellcheck systab; then
+    write_badge "failing" "red"
+    echo "ShellCheck failed — commit blocked."
+    exit 1
+fi
+
+echo "Running tests..."
+if output=$(./test.sh 2>&1); then
+    echo "$output"
+    count=$(sed -n 's/.*\([0-9]\+\) tests: \([0-9]\+\) passed.*/\2 passed/p' <<< "$output")
+    write_badge "${count:-passing}" "brightgreen"
+else
+    echo "$output"
+    write_badge "failing" "red"
+    echo "Tests failed — commit blocked."
+    exit 1
+fi
