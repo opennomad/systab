@@ -12,9 +12,12 @@ Set TypingSpeed 50ms
 Sleep 1s
 
 # First create some jobs to edit
-Type "# Create some jobs to work with"
+Hide
+Type "./demo/note.sh 'Creating some jobs to work with'"
 Enter
 Sleep 500ms
+Show
+Sleep 1s
 Type "systab -t 'every 5 minutes' -c 'echo ping'"
 Enter
 Sleep 2s
@@ -23,8 +26,11 @@ Enter
 Sleep 2s
 
 # Open edit mode with EDITOR=nano for visibility
-Type "# Open edit mode — add notifications, create and modify jobs"
+Hide
+Type "./demo/note.sh 'Opening edit mode — add notifications, create and modify jobs'"
 Enter
+Sleep 500ms
+Show
 Sleep 1s
 Type "EDITOR=nano systab -E"
 Sleep 500ms
@@ -54,17 +60,28 @@ Ctrl+X
 Sleep 3s
 
 # Show the result
-Type "# See the changes applied"
+Hide
+Type "./demo/note.sh 'Changes applied — checking status'"
 Enter
 Sleep 500ms
-Type "systab -S"
+Show
+Sleep 1s
+Type "systab -S | less"
 Sleep 500ms
 Enter
-Sleep 4s
+Sleep 2s
+Type "/Job:"
+Enter
+Sleep 3s
+Type "q"
+Sleep 1s
 
 # Re-open edit mode to show flags are persisted
-Type "# Re-open edit mode — flags are persisted"
+Hide
+Type "./demo/note.sh 'Re-opening edit mode — flags are persisted'"
 Enter
+Sleep 500ms
+Show
 Sleep 1s
 Type "EDITOR=nano systab -E"
 Sleep 500ms
