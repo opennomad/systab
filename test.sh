@@ -94,22 +94,29 @@ assert_file_contains() {
     fi
 }
 
+# Track test-created job IDs for targeted cleanup
+test_job_ids=()
+
 # Extract job ID from "Job created: <id>" or "Job created: <id> (<name>)" output
+# Sets _extracted_id and appends to test_job_ids for cleanup tracking
 extract_id() {
-    sed -n 's/^Job created: \([0-9a-f]\{6\}\)\( .*\)\{0,1\}$/\1/p' <<< "$_last_output"
+    _extracted_id=$(sed -n 's/^Job created: \([0-9a-f]\{6\}\)\( .*\)\{0,1\}$/\1/p' <<< "$_last_output")
+    test_job_ids+=("$_extracted_id")
 }
 
-# Remove all systab_* unit files and reload
+# Remove only test-created systab units and reload
 cleanup() {
     local had_units=false
-    for f in "$SYSTEMD_USER_DIR"/systab_*.service "$SYSTEMD_USER_DIR"/systab_*.timer; do
-        [[ -f "$f" ]] || continue
-        local unit
-        unit=$(basename "$f")
-        systemctl --user stop "$unit" 2>/dev/null || true
-        systemctl --user disable "$unit" 2>/dev/null || true
-        rm -f "$f"
-        had_units=true
+    for id in "${test_job_ids[@]}"; do
+        local name="systab_${id}"
+        for ext in service timer; do
+            local f="$SYSTEMD_USER_DIR/${name}.${ext}"
+            [[ -f "$f" ]] || continue
+            systemctl --user stop "${name}.${ext}" 2>/dev/null || true
+            systemctl --user disable "${name}.${ext}" 2>/dev/null || true
+            rm -f "$f"
+            had_units=true
+        done
     done
     if $had_units; then
         systemctl --user daemon-reload 2>/dev/null || true
@@ -120,7 +127,6 @@ cleanup() {
 
 _last_output=""
 trap cleanup EXIT
-cleanup
 
 echo "${BOLD}Running systab tests...${RESET}"
 echo ""
@@ -132,10 +138,10 @@ echo ""
 echo "${BOLD}--- Job creation ---${RESET}"
 
 assert_output "create recurring job" "Job created:" $SYSTAB -t "every 5 minutes" -c "echo test_recurring"
-id_recurring=$(extract_id)
+extract_id; id_recurring=$_extracted_id
 
 assert_output "create one-time job" "Job created:" $SYSTAB -t "in 30 minutes" -c "echo test_onetime"
-id_onetime=$(extract_id)
+extract_id; id_onetime=$_extracted_id
 
 if [[ -z "$id_recurring" || -z "$id_onetime" ]]; then
     echo "FATAL: could not extract job IDs, aborting"
@@ -190,33 +196,33 @@ echo ""
 echo "${BOLD}--- Notifications ---${RESET}"
 
 assert_output "create with -i" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo notify_test" -i
-id_notify=$(extract_id)
+extract_id; id_notify=$_extracted_id
 assert_file_contains "-i service has ExecStopPost" \
     "$SYSTEMD_USER_DIR/systab_${id_notify}.service" "^ExecStopPost="
 assert_file_contains "-i service has notify-send" \
     "$SYSTEMD_USER_DIR/systab_${id_notify}.service" "notify-send"
 
 assert_output "create with -i -o" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo output_test" -i -o
-id_output=$(extract_id)
+extract_id; id_output=$_extracted_id
 assert_file_contains "-i -o service has journalctl" \
     "$SYSTEMD_USER_DIR/systab_${id_output}.service" "journalctl"
 assert_file_contains "-i -o service has %%s" \
     "$SYSTEMD_USER_DIR/systab_${id_output}.service" "%%s"
 
 assert_output "create with -i -o 5" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo output5_test" -i -o 5
-id_output5=$(extract_id)
+extract_id; id_output5=$_extracted_id
 assert_file_contains "-i -o 5 service has -n 5" \
     "$SYSTEMD_USER_DIR/systab_${id_output5}.service" "-n 5"
 
 # Email notification (only if sendmail/msmtp available)
 if command -v sendmail &>/dev/null || command -v msmtp &>/dev/null; then
     assert_output "create with -m" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo mail_test" -m test@example.com
-    id_mail=$(extract_id)
+    extract_id; id_mail=$_extracted_id
     assert_file_contains "-m service has ExecStopPost" \
         "$SYSTEMD_USER_DIR/systab_${id_mail}.service" "^ExecStopPost="
 
     assert_output "create with -i -m" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo both_test" -i -m test@example.com
-    id_both=$(extract_id)
+    extract_id; id_both=$_extracted_id
     local_count=$(grep -c "^ExecStopPost=" "$SYSTEMD_USER_DIR/systab_${id_both}.service")
     if [[ "$local_count" -ge 2 ]]; then
         pass "-i -m service has two ExecStopPost lines"
@@ -279,7 +285,7 @@ echo ""
 echo "${BOLD}--- Job names ---${RESET}"
 
 assert_output "create job with name" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo named_test" -n mytest
-id_named=$(extract_id)
+extract_id; id_named=$_extracted_id
 assert_last_output_contains "name appears in creation output" "(mytest)"
 
 assert_file_contains "service file has SYSTAB_NAME" \
@@ -316,7 +322,7 @@ assert_failure "invalid job ID for -E" $SYSTAB -E "zzzzzz"
 
 # -o without -i or -m: should succeed (flag accepted, just no notification lines)
 assert_output "-o without -i/-m creates job" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo bare_output" -o
-id_bare_o=$(extract_id)
+extract_id; id_bare_o=$_extracted_id
 # Should have FLAGS comment but no ExecStopPost
 assert_file_contains "-o without -i/-m has FLAGS comment" \
     "$SYSTEMD_USER_DIR/systab_${id_bare_o}.service" "SYSTAB_FLAGS=o"

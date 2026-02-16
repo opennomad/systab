@@ -27,7 +27,7 @@ fi
 echo "Running tests..."
 if output=$(./test.sh 2>&1); then
     echo "$output"
-    count=$(sed -n 's/.*\([0-9]\+\) tests: \([0-9]\+\) passed.*/\2 passed/p' <<< "$output")
+    count=$(grep -oP '\d+ passed' <<< "$output" | tail -1)
     write_badge "${count:-passing}" "brightgreen"
 else
     echo "$output"

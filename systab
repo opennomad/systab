@@ -42,12 +42,12 @@ Job Creation Options:
   -m <email>        Send email notification to address (via sendmail)
   -o [lines]        Include job output in notifications (default: 10 lines)
 
-Management Options:
-  -D <id>           Disable a job
-  -E <id>           Enable a disabled job
+Management Options (accept hex ID or name):
+  -D <id|name>      Disable a job
+  -E <id|name>      Enable a disabled job
   -e                Edit jobs in crontab-like format
-  -L [id] [filter]  List job logs (optionally for a specific job and/or filtered)
-  -S [id]           Show status of all managed jobs (or a specific job)
+  -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
+  -S [id|name]      Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs
 
 TIME FORMATS:
@@ -267,36 +267,29 @@ validate_job_id() {
     grep -q "^$MARKER" "$timer_file" 2>/dev/null || error "Not a managed job: $id"
 }
 
-# Disable a job by short ID or name
-disable_job_by_id() {
-    validate_job_id "$1"
+# Toggle a job's enabled state by short ID or name
+# Usage: toggle_job_by_id <id|name> <disable|enable>
+toggle_job_by_id() {
+    local input="$1" action="$2"
+    validate_job_id "$input"
     local id="$_resolved_id"
     local name
     name=$(get_job_name "$SYSTEMD_USER_DIR/${_job_name}.service")
     local label
     label=$(format_job_id "$id" "$name")
-    if ! is_job_enabled "$_job_name"; then
-        echo "Already disabled: $label"
-        return
+    if [[ "$action" == "disable" ]]; then
+        if ! is_job_enabled "$_job_name"; then
+            echo "Already disabled: $label"; return
+        fi
+        disable_job "$_job_name"
+        echo "Disabled: $label"
+    else
+        if is_job_enabled "$_job_name"; then
+            echo "Already enabled: $label"; return
+        fi
+        enable_job "$_job_name"
+        echo "Enabled: $label"
     fi
-    disable_job "$_job_name"
-    echo "Disabled: $label"
-}
-
-# Enable a job by short ID or name
-enable_job_by_id() {
-    validate_job_id "$1"
-    local id="$_resolved_id"
-    local name
-    name=$(get_job_name "$SYSTEMD_USER_DIR/${_job_name}.service")
-    local label
-    label=$(format_job_id "$id" "$name")
-    if is_job_enabled "$_job_name"; then
-        echo "Already enabled: $label"
-        return
-    fi
-    enable_job "$_job_name"
-    echo "Enabled: $label"
 }
 
 # Get all managed unit files of a given type (service or timer)
@@ -1120,9 +1113,9 @@ main() {
     
     # Determine mode based on options
     if [[ -n "$opt_disable" ]]; then
-        disable_job_by_id "$opt_disable"
+        toggle_job_by_id "$opt_disable" disable
     elif [[ -n "$opt_enable" ]]; then
-        enable_job_by_id "$opt_enable"
+        toggle_job_by_id "$opt_enable" enable
     elif $opt_edit; then
         edit_jobs
     elif $opt_list; then

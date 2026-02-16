@@ -167,12 +167,12 @@ Job Creation:
   -m <email>        Send email notification to address (via sendmail)
   -o [lines]        Include job output in notifications (default: 10 lines)
 
-Management:
-  -D <id>           Disable a job
-  -E <id>           Enable a disabled job
+Management (accept hex ID or name):
+  -D <id|name>      Disable a job
+  -E <id|name>      Enable a disabled job
   -e                Edit jobs in crontab-like format
-  -L [id] [filter]  List job logs (optionally for a specific job and/or filtered)
-  -S [id]           Show status of all managed jobs (or a specific job)
+  -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
+  -S [id|name]      Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs
   -h                Show help
 ```
