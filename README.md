@@ -211,3 +211,7 @@ I was missing the simplicity of `at` and `crontab` commands. `systemd` has many 
 **What's the difference between `-c` and `-f`?**
 
 `-f` validates that the file exists and is executable at creation time, catching typos and permission issues early. With `-c`, errors only surface when systemd runs the job later (visible via `systab -L`). Under the hood, both produce the same `ExecStart` line.
+
+**Why did you mess with the crontab format?**
+
+Originally I meant to keep it the same, but there isn't a one-to-one mapping of times supported by cron and systemd. systemd has more options. I also want the human readble strings like "in 5 minutes". Trying to force that into the crontab format with it's space delimited format meant quotes, etc. in the end I used the `|` and limit the number of fields so that the commands can also be piped.
