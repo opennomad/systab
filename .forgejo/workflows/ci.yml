@@ -16,3 +16,9 @@ jobs:
         run: apt-get update && apt-get install -y shellcheck
       - name: Run ShellCheck
         run: shellcheck systab
+      - name: Purge GitHub mirror badge cache
+        run: |
+          curl -sL https://github.com/opennomad/systab \
+            | grep -oP 'https://camo\.githubusercontent\.com/[^"]+' \
+            | sort -u \
+            | xargs -I{} curl -sX PURGE '{}'
