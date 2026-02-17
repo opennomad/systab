@@ -6,6 +6,14 @@
 
 A cron/at-like interface for systemd user timers. Create, manage, and monitor scheduled jobs without writing unit files by hand.
 
+Because you want to use systemd, but miss the ease of ~crontab~`systab -e`!
+
+- 🚀 create one-time or recurring jobs with one command
+- ✏️ use your $EDITOR to manage `systab` timers in a single line format
+- 📊 quickly see the status of your timers
+- 📋 access the logs of timers
+- 💪 enable and disable timers
+
 <table>
 <tr>
 <td width="33%"><img src="demo/quickstart.gif" alt="Quick start demo"></td>
@@ -193,7 +201,12 @@ After cloning, enable the pre-commit hook (runs ShellCheck + tests):
 git config core.hooksPath .githooks
 ```
 
+
 ## FAQ
+
+Why this wrapper?
+
+I was missing the simplicity of `at` and `crontab` commands. `systemd` has many features and benefits that those tools do not have, but convenience for the user to set a quick timer is not one of them.
 
 **What's the difference between `-c` and `-f`?**
 
