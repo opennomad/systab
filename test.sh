@@ -97,10 +97,10 @@ assert_file_contains() {
 # Track test-created job IDs for targeted cleanup
 test_job_ids=()
 
-# Extract job ID from "Job created: <id>" or "Job created: <id> (<name>)" output
+# Extract job ID from "Job created: <id>", "Service created: <id>", or with name suffix
 # Sets _extracted_id and appends to test_job_ids for cleanup tracking
 extract_id() {
-    _extracted_id=$(sed -n 's/^Job created: \([0-9a-f]\{6\}\)\( .*\)\{0,1\}$/\1/p' <<< "$_last_output")
+    _extracted_id=$(sed -n 's/^\(Job\|Service\) created: \([0-9a-f]\{6\}\)\( .*\)\{0,1\}$/\2/p' <<< "$_last_output")
     test_job_ids+=("$_extracted_id")
 }
 
@@ -332,6 +332,84 @@ if grep -q "^ExecStopPost=" "$SYSTEMD_USER_DIR/systab_${id_bare_o}.service"; the
 else
     pass "-o without -i/-m has no ExecStopPost"
 fi
+
+# ============================================================
+# Services (-s)
+# ============================================================
+
+echo ""
+echo "${BOLD}--- Services ---${RESET}"
+
+# Create a persistent service job (sleep 3600 stays running)
+assert_output "create service job" "Service created:" $SYSTAB -s -c "sleep 3600"
+extract_id; id_svc=$_extracted_id
+
+if [[ -z "$id_svc" ]]; then
+    echo "FATAL: could not extract service job ID, aborting"
+    exit 1
+fi
+
+# Unit file checks (mirrors tape: cat the service file)
+assert_file_contains "service file has SYSTAB_TYPE=service" \
+    "$SYSTEMD_USER_DIR/systab_${id_svc}.service" "^# SYSTAB_TYPE=service$"
+assert_file_contains "service file has Type=simple" \
+    "$SYSTEMD_USER_DIR/systab_${id_svc}.service" "^Type=simple$"
+assert_file_contains "service file has Restart=on-failure" \
+    "$SYSTEMD_USER_DIR/systab_${id_svc}.service" "^Restart=on-failure$"
+assert_file_contains "service file has WantedBy=default.target" \
+    "$SYSTEMD_USER_DIR/systab_${id_svc}.service" "^WantedBy=default.target$"
+
+# No timer file should exist (mirrors tape: no timer)
+if [[ -f "$SYSTEMD_USER_DIR/systab_${id_svc}.timer" ]]; then
+    fail "service job has no .timer file" "timer file unexpectedly exists"
+else
+    pass "service job has no .timer file"
+fi
+
+# Service should be active (mirrors tape: "Active (running)")
+if systemctl --user is-active "systab_${id_svc}.service" &>/dev/null; then
+    pass "service job is active"
+else
+    fail "service job is active" "service not running"
+fi
+
+# Status shows Type: Service and real systemd state (mirrors tape: systab -S monitor)
+assert_output "status shows Type: Service" "Type: Service" $SYSTAB -S "$id_svc"
+assert_output "status shows active state" "Service: active" $SYSTAB -S "$id_svc"
+
+# Logs work for service jobs (mirrors tape: systab -L monitor)
+assert_output "logs for service job" "Logs for" $SYSTAB -L "$id_svc"
+
+# Service with a name (mirrors tape: -s -n monitor)
+assert_output "create service job with name" "Service created:" $SYSTAB -s -n svctest -c "sleep 3600"
+extract_id; id_svc_named=$_extracted_id
+assert_last_output_contains "service name appears in creation output" "(svctest)"
+assert_file_contains "service file has SYSTAB_NAME" \
+    "$SYSTEMD_USER_DIR/systab_${id_svc_named}.service" "^# SYSTAB_NAME=svctest$"
+
+# Disable stops the service (mirrors tape: systab -D monitor)
+assert_output "disable service job" "Disabled:" $SYSTAB -D "$id_svc"
+assert_output "disabled service shows in status" "Disabled" $SYSTAB -S "$id_svc"
+assert_output "disable already disabled service" "Already disabled:" $SYSTAB -D "$id_svc"
+
+# Enable restarts the service (mirrors tape: systab -E monitor)
+assert_output "enable service job" "Enabled:" $SYSTAB -E "$id_svc"
+assert_output "enable already enabled service" "Already enabled:" $SYSTAB -E "$id_svc"
+
+# Edit mode shows service jobs with 'service' in schedule column
+# (mirrors tape: EDITOR=nano systab -e shows "id:s | service | cmd")
+edit_output=$(EDITOR=cat $SYSTAB -e 2>&1 || true)
+if [[ "$edit_output" == *"| service |"* ]]; then
+    pass "edit mode shows service job with 'service' schedule"
+else
+    fail "edit mode shows service job with 'service' schedule" "not found in: $edit_output"
+fi
+
+# Mutually exclusive flags (mirrors tape design: -s conflicts with -t/-i/-m/-o)
+assert_failure "-s and -t are mutually exclusive" $SYSTAB -s -t daily -c "echo test"
+assert_failure "-s and -i are mutually exclusive" $SYSTAB -s -i -c "echo test"
+assert_failure "-s and -m are mutually exclusive" $SYSTAB -s -m user@example.com -c "echo test"
+assert_failure "-s and -o are mutually exclusive" $SYSTAB -s -o -c "echo test"
 
 # ============================================================
 # Clean
