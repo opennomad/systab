@@ -4,26 +4,29 @@
 [![Tests](https://img.shields.io/endpoint?url=https://code.opennomad.com/opennomad/systab/raw/branch/main/badges/tests.json)](badges/tests.json)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-A cron/at-like interface for systemd user timers. Create, manage, and monitor scheduled jobs without writing unit files by hand.
+A cron/at-like interface for systemd user timers and services. Create, manage, and monitor scheduled jobs and persistent services without writing unit files by hand.
 
 Because you want to use systemd, but miss the ease of ~crontab~`systab -e`!
 
 - 🚀 create one-time or recurring jobs with one command
-- ✏️ use your $EDITOR to manage `systab` timers in a single line format
-- 📊 quickly see the status of your timers
-- 📋 access the logs of timers
-- 💪 enable and disable timers
+- 🔧 run persistent services that start on login and auto-restart on failure
+- ✏️ use your $EDITOR to manage `systab` jobs in a single line format
+- 📊 quickly see the status of your timers and services
+- 📋 access the logs of any job
+- 💪 enable and disable timers and services
 
 <table>
 <tr>
-<td width="33%"><img src="demo/quickstart.gif" alt="Quick start demo"></td>
-<td width="33%"><img src="demo/editmode.gif" alt="Edit mode demo"></td>
-<td width="33%"><img src="demo/notifications.gif" alt="Notifications demo"></td>
+<td width="25%"><img src="demo/quickstart.gif" alt="Quick start demo"></td>
+<td width="25%"><img src="demo/editmode.gif" alt="Edit mode demo"></td>
+<td width="25%"><img src="demo/notifications.gif" alt="Notifications demo"></td>
+<td width="25%"><img src="demo/services.gif" alt="Services demo"></td>
 </tr>
 <tr>
 <td align="center"><b>Quick start</b></td>
 <td align="center"><b>Edit mode</b></td>
 <td align="center"><b>Notifications</b></td>
+<td align="center"><b>Services</b></td>
 </tr>
 </table>
 
@@ -49,7 +52,10 @@ systab -t "every day at 2am" -n backup -f ~/backup.sh
 # Run a one-time command in 30 minutes
 systab -t "in 30 minutes" -c "echo reminder"
 
-# Check status of all jobs
+# Run a persistent service (starts on login, auto-restarts on failure)
+systab -s -n monitor -c "/usr/bin/my-monitor.sh"
+
+# Check status of all jobs and services
 systab -S
 
 # View logs
@@ -83,7 +89,7 @@ Note: `date -d` does not technically like "*in* 5 minutes" or "*at*" between day
 
 ## Usage
 
-### Creating jobs
+### Creating timer jobs
 
 ```bash
 # Command string (with optional name)
@@ -104,6 +110,20 @@ systab -t "every day at 6am" -c "df -h" -m user@example.com
 # Include last 10 lines of output in notification
 systab -t "every day at 6am" -c "df -h" -i -o
 ```
+
+### Creating persistent services
+
+Use `-s` instead of `-t` to create a service that starts on login and auto-restarts on failure (`Restart=on-failure`). No timer is involved — the service runs continuously.
+
+```bash
+# Persistent service (starts immediately, restarts on failure)
+systab -s -n monitor -c "/usr/bin/my-monitor.sh"
+
+# With a name for easy reference
+systab -s -n syncthing -c "/usr/bin/syncthing --no-browser"
+```
+
+Disable/enable work the same as for timer jobs — disable stops the service and prevents it from starting on login; enable starts it immediately and re-enables it.
 
 ### Managing jobs
 
@@ -150,8 +170,9 @@ g7h8i9:n=weekly-backup,e=user@host | weekly | ~/backup.sh
 - Edit the schedule or command to update a job
 - Delete a line to remove a job
 - Add a line with `new` as the ID to create a job: `new | every 5 minutes | echo hello`
+- Add a service with `new:s` and `service` as the schedule: `new:s,n=monitor | service | /usr/bin/my-monitor.sh`
 - Comment out a line (`#`) to disable, uncomment to enable
-- Append flags after the ID with `:` — `n=name` for naming, `i` for desktop notification, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:n=backup,i,o,e=user@host`)
+- Append flags after the ID with `:` — `s` for service, `n=name` for naming, `i` for desktop notification, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:n=backup,i,o,e=user@host`)
 
 ### Job IDs and names
 
@@ -159,15 +180,18 @@ Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in
 
 ## How it works
 
-systab creates systemd `.service` and `.timer` unit file pairs in `~/.config/systemd/user/`. Each managed unit is tagged with a `# SYSTAB_MANAGED` marker comment. One-time jobs auto-unload after firing. Job output (stdout/stderr) is captured in the systemd journal and viewable via `systab -L`.
+**Timer jobs** (`-t`): systab creates a `.service` + `.timer` unit file pair in `~/.config/systemd/user/`. One-time jobs auto-unload after firing. Notifications use `ExecStopPost` so they fire after the service completes regardless of success or failure, with `dialog-information` or `dialog-error` icons based on `$SERVICE_RESULT`.
 
-Notifications use `ExecStopPost` so they fire after the service completes regardless of success or failure. Desktop notifications show `dialog-information` or `dialog-error` icons based on `$SERVICE_RESULT`. Notification flags are persisted as `# SYSTAB_FLAGS=` comments in service files, so they survive across edit sessions.
+**Service jobs** (`-s`): systab creates a single `.service` unit file with `Type=simple`, `Restart=on-failure`, and `WantedBy=default.target`. No timer is created. The service starts immediately on creation and restarts on login. Disable stops the service; enable starts it again.
+
+All managed units are tagged with a `# SYSTAB_MANAGED` marker comment and a 6-char hex ID. Job output (stdout/stderr) is captured in the systemd journal and viewable via `systab -L`. Flags (names, notification settings, service type) are persisted as `# SYSTAB_FLAGS=` comments in service files so they survive edit sessions.
 
 ## Options
 
 ```
 Job Creation:
-  -t <time>         Time specification (required for job creation)
+  -t <time>         Time specification (required for timer jobs)
+  -s                Create a persistent service (mutually exclusive with -t/-i/-m/-o)
   -c <command>      Command string to execute
   -f <script>       Script file to execute (reads stdin if neither -c nor -f)
   -n <name>         Give the job a human-readable name (usable in place of hex ID)
