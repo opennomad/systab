@@ -104,6 +104,9 @@ echo "ls -la /tmp" | systab -t daily
 # With desktop notification (success/failure with status icon)
 systab -t "in 1 hour" -c "make build" -i
 
+# With desktop notification and a name (notification shows "build (name): completed")
+systab -t "in 1 hour" -n build -c "make build" -i
+
 # With email notification (via sendmail)
 systab -t "every day at 6am" -c "df -h" -m user@example.com
 
@@ -180,7 +183,7 @@ Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in
 
 ## How it works
 
-**Timer jobs** (`-t`): systab creates a `.service` + `.timer` unit file pair in `~/.config/systemd/user/`. One-time jobs auto-unload after firing. Notifications use `ExecStopPost` so they fire after the service completes regardless of success or failure, with `dialog-information` or `dialog-error` icons based on `$SERVICE_RESULT`.
+**Timer jobs** (`-t`): systab creates a `.service` + `.timer` unit file pair in `~/.config/systemd/user/`. One-time jobs auto-unload after firing. Notifications use `ExecStopPost` so they fire after the service completes regardless of success or failure, with `dialog-information` or `dialog-error` icons based on `$SERVICE_RESULT`. When a job has a name, notifications display it as `ID (name)` — looked up dynamically so the label stays current even if the name is changed after creation.
 
 **Service jobs** (`-s`): systab creates a single `.service` unit file with `Type=simple`, `Restart=on-failure`, and `WantedBy=default.target`. No timer is created. The service starts immediately on creation and restarts on login. Disable stops the service; enable starts it again.
 
