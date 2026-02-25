@@ -245,23 +245,23 @@ fi
 echo ""
 echo "${BOLD}--- Time format parsing ---${RESET}"
 
-# Source parse_time from systab (we need the function)
+# Source parseTime from systab (we need the function)
 # We can call it by running systab in a subshell that only defines the function
 parse_time_test() {
     local input="$1" expected="$2"
-    # Run parse_time via bash sourcing
+    # Run parseTime via bash sourcing
     local result
     if result=$(bash -c '
-        source <(sed -n "/^parse_time()/,/^}/p" ./systab; sed -n "/^error()/,/^}/p" ./systab; sed -n "/^is_recurring()/,/^}/p" ./systab)
-        parse_time "$1"
+        source <(sed -n "/^parseTime()/,/^}/p" ./systab; sed -n "/^error()/,/^}/p" ./systab; sed -n "/^isRecurring()/,/^}/p" ./systab)
+        parseTime "$1"
     ' _ "$input" 2>&1); then
         if [[ "$result" == "$expected" ]]; then
-            pass "parse_time '$input' -> '$expected'"
+            pass "parseTime '$input' -> '$expected'"
         else
-            fail "parse_time '$input'" "got '$result', expected '$expected'"
+            fail "parseTime '$input'" "got '$result', expected '$expected'"
         fi
     else
-        fail "parse_time '$input'" "failed: $result"
+        fail "parseTime '$input'" "failed: $result"
     fi
 }
 
@@ -277,9 +277,9 @@ parse_time_test "weekly" "weekly"
 parse_time_test "monthly" "monthly"
 
 # "in 5 minutes" produces an absolute timestamp — just check it doesn't fail
-assert_success "parse_time 'in 5 minutes' succeeds" bash -c '
-    source <(sed -n "/^parse_time()/,/^}/p" ./systab; sed -n "/^error()/,/^}/p" ./systab)
-    parse_time "in 5 minutes"
+assert_success "parseTime 'in 5 minutes' succeeds" bash -c '
+    source <(sed -n "/^parseTime()/,/^}/p" ./systab; sed -n "/^error()/,/^}/p" ./systab)
+    parseTime "in 5 minutes"
 '
 
 # ============================================================
