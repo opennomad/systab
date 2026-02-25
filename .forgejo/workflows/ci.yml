@@ -18,7 +18,9 @@ jobs:
         run: shellcheck systab
       - name: Purge GitHub mirror badge cache
         run: |
-          curl -sL https://github.com/opennomad/systab \
+          curl -sL \
+            -H "Accept: application/vnd.github.html+json" \
+            "https://api.github.com/repos/opennomad/systab/readme" \
             | grep -oP 'https://camo\.githubusercontent\.com/[^"]+' \
             | sort -u \
             | xargs -r -I{} curl -sX PURGE '{}' || true
