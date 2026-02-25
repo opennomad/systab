@@ -202,6 +202,11 @@ assert_file_contains "-i service has ExecStopPost" \
 assert_file_contains "-i service has notify-send" \
     "$SYSTEMD_USER_DIR/systab_${id_notify}.service" "notify-send"
 
+assert_output "create with -i -n" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo named_notify_test" -i -n "notifytest"
+extract_id; id_named_notify=$_extracted_id
+assert_file_contains "-i -n ExecStopPost has dynamic name lookup" \
+    "$SYSTEMD_USER_DIR/systab_${id_named_notify}.service" "^ExecStopPost=.*SYSTAB_NAME"
+
 assert_output "create with -i -o" "Job created:" $SYSTAB -t "every 10 minutes" -c "echo output_test" -i -o
 extract_id; id_output=$_extracted_id
 assert_file_contains "-i -o service has journalctl" \

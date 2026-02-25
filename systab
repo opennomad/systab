@@ -386,16 +386,18 @@ parse_flags() {
 }
 
 # Write ExecStopPost notification lines to a service file
-# Usage: write_notify_lines <short_id> <notify_flag> <email_addr> <file> [output_lines] [job_name] [display_name]
+# Usage: write_notify_lines <short_id> <notify_flag> <email_addr> <file> [output_lines] [job_name]
 write_notify_lines() {
     local short_id="$1" notify="$2" email="$3" file="$4"
-    local output_lines="${5-}" job_name="${6-}" display_name="${7-}"
-    local job_label="$short_id"
-    [[ -n "$display_name" ]] && job_label="$short_id ($display_name)"
+    local output_lines="${5-}" job_name="${6-}"
     local out_cmd=""
     if [[ -n "$output_lines" && -n "$job_name" ]]; then
         out_cmd="out=\$(journalctl --user SYSLOG_IDENTIFIER=$job_name -n $output_lines --no-pager -o cat); "
     fi
+    # Look up the job name from the service file at notification runtime so the label
+    # reflects the current name even if it was added or changed after job creation.
+    # shellcheck disable=SC2016
+    local label_pre="svc=\"$file\"; name=\$(grep \"^# SYSTAB_NAME=\" \"\$svc\" 2>/dev/null | cut -d= -f2-); [ -n \"\$name\" ] && label=\"$short_id (\$name)\" || label=\"$short_id\"; "
     # Common status preamble shared by all notification lines (intentionally unexpanded)
     # shellcheck disable=SC2016
     local icon_pre='if [ "$SERVICE_RESULT" = success ]; then icon=dialog-information; s=completed; else icon=dialog-error; s="failed ($EXIT_STATUS)"; fi; '
@@ -404,9 +406,9 @@ write_notify_lines() {
     if [[ "$notify" == true ]]; then
         local notify_cmd
         if [[ -n "$out_cmd" ]]; then
-            notify_cmd="${out_cmd}body=\$(printf \"Job $job_label: %%s\n%%s\" \"\$s\" \"\$out\"); notify-send -i \"\$icon\" \"systab\" \"\$body\" || true"
+            notify_cmd="${label_pre}${out_cmd}body=\$(printf \"Job \$label: %%s\n%%s\" \"\$s\" \"\$out\"); notify-send -i \"\$icon\" \"systab\" \"\$body\" || true"
         else
-            notify_cmd="notify-send -i \"\$icon\" \"systab\" \"Job $job_label: \$s\" || true"
+            notify_cmd="${label_pre}notify-send -i \"\$icon\" \"systab\" \"Job \$label: \$s\" || true"
         fi
         echo "ExecStopPost=/bin/sh -c '${icon_pre}${notify_cmd}'" >> "$file"
     fi
@@ -416,9 +418,9 @@ write_notify_lines() {
         [[ -n "$mailer" ]] || { warn "No sendmail or msmtp found, skipping email notification"; return; }
         local mail_cmd
         if [[ -n "$out_cmd" ]]; then
-            mail_cmd="${out_cmd}printf \"Subject: systab: $job_label %%s\\\\n\\\\n%%s at %%s\\\\n\\\\n%%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" \"\$out\" | $mailer $email"
+            mail_cmd="${label_pre}${out_cmd}printf \"Subject: systab: \$label %%s\\\\n\\\\n%%s at %%s\\\\n\\\\n%%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" \"\$out\" | $mailer $email"
         else
-            mail_cmd="printf \"Subject: systab: $job_label %%s\\\\n\\\\n%%s at %%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" | $mailer $email"
+            mail_cmd="${label_pre}printf \"Subject: systab: \$label %%s\\\\n\\\\n%%s at %%s\\\\n\" \"\$s\" \"\$s\" \"\$(date)\" | $mailer $email"
         fi
         echo "ExecStopPost=/bin/sh -c '${status_pre}${mail_cmd}'" >> "$file"
     fi
@@ -487,7 +489,7 @@ EOF
             echo "# SYSTAB_FLAGS=$flags" >> "$service_file"
             parse_flags "$flags"
             [[ -n "$_name" ]] && echo "# SYSTAB_NAME=$_name" >> "$service_file"
-            write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$job_name" "$_name"
+            write_notify_lines "$short_id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$job_name"
         fi
 
         # Timer file
@@ -947,7 +949,7 @@ HEADER
                     echo "# SYSTAB_FLAGS=$new_flags" >> "$service_file"
                     parse_flags "$new_flags"
                     [[ -n "$_name" ]] && echo "# SYSTAB_NAME=$_name" >> "$service_file"
-                    write_notify_lines "$id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$jname" "$_name"
+                    write_notify_lines "$id" "$_notify_flag" "$_email_addr" "$service_file" "$_output_lines" "$jname"
                 fi
             fi
 
