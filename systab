@@ -276,11 +276,10 @@ is_job_service() {
 get_managed_service_jobs() {
     [[ -d "$SYSTEMD_USER_DIR" ]] || return
     local file
-    for file in "$SYSTEMD_USER_DIR"/*.service; do
+    for file in "${SYSTEMD_USER_DIR}/${SCRIPT_NAME}"_*.service; do
         [[ -f "$file" ]] || continue
         grep -q "^$MARKER" "$file" 2>/dev/null || continue
-        grep -q "^# SYSTAB_TYPE=service$" "$file" 2>/dev/null || continue
-        basename "$file" .service
+        grep -q "^# SYSTAB_TYPE=service$" "$file" 2>/dev/null && basename "$file" .service
     done
 }
 
@@ -561,7 +560,6 @@ create_job() {
     local label job_name
     if $opt_service; then
         _write_unit_files "$command_to_run" "service" "$(build_flags_string)" service
-        systemctl --user daemon-reload
         job_name="${SCRIPT_NAME}_${_created_id}"
         label=$(format_job_id "$_created_id" "$opt_name")
         echo "Service created: $label"
@@ -598,12 +596,13 @@ remove_job() {
 
 # Create a job from edit mode (schedule + command + flags, prints short ID)
 create_job_from_edit() {
-    if [[ "$1" == "service" ]]; then
-        _write_unit_files "$2" "service" "${3-}" service
+    local sched="$1" cmd="$2" flags="${3-}"
+    if [[ "$sched" == "service" ]]; then
+        _write_unit_files "$cmd" "service" "$flags" service
     else
         local schedule
-        schedule=$(parse_time "$1")
-        _write_unit_files "$2" "$schedule" "${3-}"
+        schedule=$(parse_time "$sched")
+        _write_unit_files "$cmd" "$schedule" "$flags"
     fi
     echo "$_created_id"
 }
@@ -795,7 +794,8 @@ HEADER
     # Values stored as "flags<TAB>schedule|cmd"
     # Usage: parse_crontab_file <file> <jobs_var> <commented_var> [new_jobs_var]
     parse_crontab_file() {
-        local file="$1" jobs_ref="$2" commented_ref="$3" new_ref="${4-}"
+        local file="$1" new_ref="${4-}"
+        local -n _pcf_jobs="$2" _pcf_commented="$3"
         local line tab=$'\t'
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
@@ -805,18 +805,17 @@ HEADER
                 parse_crontab_line "$uncommented"
                 # Only treat as disabled job if ID looks like a hex short ID (with optional :flags)
                 if [[ -n "$_parsed_id" && -n "$_parsed_sched" && "$_parsed_id" =~ ^[0-9a-f]{6}$ ]]; then
-                    local _val="${_parsed_flags}${tab}${_parsed_sched}|${_parsed_cmd}"
-                    eval "${commented_ref}[\"\$_parsed_id\"]=\$_val"
+                    _pcf_commented["$_parsed_id"]="${_parsed_flags}${tab}${_parsed_sched}|${_parsed_cmd}"
                 fi
                 continue
             fi
             parse_crontab_line "$line"
             [[ -n "$_parsed_id" && -n "$_parsed_sched" ]] || continue
-            local _val="${_parsed_flags}${tab}${_parsed_sched}|${_parsed_cmd}"
+            local val="${_parsed_flags}${tab}${_parsed_sched}|${_parsed_cmd}"
             if [[ "$_parsed_id" == "new" && -n "$new_ref" ]]; then
-                eval "${new_ref}+=(\"\$_val\")"
+                eval "${new_ref}+=(\"$val\")"
             else
-                eval "${jobs_ref}[\"\$_parsed_id\"]=\$_val"
+                _pcf_jobs["$_parsed_id"]="$val"
             fi
         done < "$file"
     }
