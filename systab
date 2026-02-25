@@ -620,20 +620,17 @@ editJobs() {
     # Build crontab content
     {
         cat <<'HEADER'
-# systab jobs — edit schedule/command, add/remove lines
+# systab jobs — edit schedule/command, enable/disable, add/remove lines
 # Format: ID[:FLAGS] | SCHEDULE | COMMAND  (pipe-separated)
 # Remove a line to delete a job.
 # Add a line with "new" as ID to create a job: new | daily | /path/to/cmd
 # Comment out a line to disable, uncomment to re-enable.
 #
-# Flags (append to ID with ':'): s = service, i = desktop, e=addr = email,
-#   o = include output (default 10 lines), o=N = include N lines of output,
+# Flags (append to ID with ':'): s - service, i - notify desktop, e=addr - send email,
+#   o - include output (default 10 lines), o=N - include N lines of output,
 #   n=name = human-readable name (usable in place of hex ID)
-#   a1b2c3:i | daily | cmd               desktop notification
-#   a1b2c3:i,o | daily | cmd             desktop with last 10 lines of output
 #   a1b2c3:n=backup,i | daily | cmd      named job with desktop notification
-#   a1b2c3:e=user@host | daily | cmd      email notification
-#   a1b2c3:i,e=user@host | daily | cmd    both
+#   a1b2c3:i,e=user@host | daily | cmd   email and desktop notificaton
 #   a1b2c3:s | service | cmd             persistent service (no timer)
 #   new:s,n=name | service | cmd         new persistent service
 #
@@ -644,6 +641,9 @@ editJobs() {
 #   *-*-* 02:00:00  daily at 2am
 #   Mon *-*-* 09:00 every Monday at 9am
 #   *-*-01 00:00:00 first of every month
+#########################
+### add entries below ###
+#########################
 HEADER
 
         local job
