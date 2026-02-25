@@ -21,4 +21,4 @@ jobs:
           curl -sL https://github.com/opennomad/systab \
             | grep -oP 'https://camo\.githubusercontent\.com/[^"]+' \
             | sort -u \
-            | xargs -I{} curl -sX PURGE '{}'
+            | xargs -r -I{} curl -sX PURGE '{}' || true
