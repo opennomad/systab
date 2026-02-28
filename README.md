@@ -131,6 +131,9 @@ Disable/enable work the same as for timer jobs — disable stops the service and
 ### Managing jobs
 
 ```bash
+# Print all jobs in crontab-like format to stdout (useful for scripting)
+systab -l
+
 # Edit all jobs in your $EDITOR (crontab-style)
 systab -e
 
@@ -206,6 +209,7 @@ Management (accept hex ID or name):
   -D <id|name>      Disable a job
   -E <id|name>      Enable a disabled job
   -e                Edit jobs in crontab-like format
+  -l                Print jobs in crontab-like format to stdout
   -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
   -S [id|name]      Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs

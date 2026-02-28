@@ -18,6 +18,7 @@ opt_notify=false
 opt_email=""
 opt_edit=false
 opt_list=false
+opt_print_crontab=false
 opt_clean=false
 opt_status=false
 opt_disable=""
@@ -48,6 +49,7 @@ Management Options (accept hex ID or name):
   -D <id|name>      Disable a job
   -E <id|name>      Enable a disabled job
   -e                Edit jobs in crontab-like format
+  -l                Print jobs in crontab-like format to stdout
   -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
   -S [id|name]      Show status of all managed jobs (or a specific job)
   -C                Clean up completed one-time jobs
@@ -76,6 +78,9 @@ EXAMPLES:
 
   # Create a persistent service job
   $SCRIPT_NAME -s -n foobar -c "/usr/bin/foobar.sh"
+
+  # Print jobs in crontab-like format (useful for scripting)
+  $SCRIPT_NAME -l
 
   # Edit existing jobs (supports adding notifications via ID:flags syntax)
   $SCRIPT_NAME -e
@@ -609,17 +614,9 @@ createJobFromEdit() {
     echo "$_created_id"
 }
 
-# Edit jobs in crontab-like format
-editJobs() {
-    local temp_file orig_file
-    temp_file="${TMPDIR:-/dev/shm}/systab_edit_$$"
-    orig_file="${TMPDIR:-/dev/shm}/systab_orig_$$"
-    # shellcheck disable=SC2064
-    trap "rm -f '$temp_file' '$orig_file'" EXIT
-
-    # Build crontab content
-    {
-        cat <<'HEADER'
+# Print crontab content (header + aligned job lines) to stdout
+printCrontabContent() {
+    cat <<'HEADER'
 # systab jobs — edit schedule/command, enable/disable, add/remove lines
 # Format: ID[:FLAGS] | SCHEDULE | COMMAND  (pipe-separated)
 # Remove a line to delete a job.
@@ -646,54 +643,78 @@ editJobs() {
 #########################
 HEADER
 
-        local job
-        while IFS= read -r job; do
-            [[ -z "$job" ]] && continue
+    local -a id_fields schedules commands disabled
+    local job
 
-            local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
-            local service_file="$SYSTEMD_USER_DIR/${job}.service"
+    while IFS= read -r job; do
+        [[ -z "$job" ]] && continue
+        local timer_file="$SYSTEMD_USER_DIR/${job}.timer"
+        local service_file="$SYSTEMD_USER_DIR/${job}.service"
+        if [[ -f "$timer_file" && -f "$service_file" ]]; then
+            local id schedule command flags id_field
+            id=$(jobId "$job")
+            schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
+            command=$(getJobCommand "$service_file")
+            flags=$(grep "^# SYSTAB_FLAGS=" "$service_file" 2>/dev/null | sed 's/^# SYSTAB_FLAGS=//' || true)
+            [[ -n "$flags" ]] && id_field="$id:$flags" || id_field="$id"
+            id_fields+=("$id_field")
+            schedules+=("$schedule")
+            commands+=("$command")
+            if isJobEnabled "$job"; then disabled+=(false); else disabled+=(true); fi
+        fi
+    done < <(getManagedUnits timer)
 
-            if [[ -f "$timer_file" && -f "$service_file" ]]; then
-                local id schedule command flags id_field
-                id=$(jobId "$job")
-                schedule=$(grep "^OnCalendar=" "$timer_file" | cut -d= -f2-)
-                command=$(getJobCommand "$service_file")
-                flags=$(grep "^# SYSTAB_FLAGS=" "$service_file" 2>/dev/null | sed 's/^# SYSTAB_FLAGS=//' || true)
-                if [[ -n "$flags" ]]; then
-                    id_field="$id:$flags"
-                else
-                    id_field="$id"
-                fi
-                if isJobEnabled "$job"; then
-                    printf '%s | %s | %s\n' "$id_field" "$schedule" "$command"
-                else
-                    printf '# %s | %s | %s\n' "$id_field" "$schedule" "$command"
-                fi
-            fi
-        done < <(getManagedUnits timer)
+    while IFS= read -r job; do
+        [[ -z "$job" ]] && continue
+        local service_file="$SYSTEMD_USER_DIR/${job}.service"
+        if [[ -f "$service_file" ]]; then
+            local id command flags id_field
+            id=$(jobId "$job")
+            command=$(getJobCommand "$service_file")
+            flags=$(grep "^# SYSTAB_FLAGS=" "$service_file" 2>/dev/null | sed 's/^# SYSTAB_FLAGS=//' || true)
+            [[ -n "$flags" ]] && id_field="$id:$flags" || id_field="$id:s"
+            id_fields+=("$id_field")
+            schedules+=("service")
+            commands+=("$command")
+            if isJobEnabled "$job"; then disabled+=(false); else disabled+=(true); fi
+        fi
+    done < <(getManagedServiceJobs)
 
-        while IFS= read -r job; do
-            [[ -z "$job" ]] && continue
+    # Compute column widths; disabled lines account for the "# " prefix
+    local max_id=0 max_sched=0 i len
+    for i in "${!id_fields[@]}"; do
+        len=${#id_fields[$i]}
+        ${disabled[$i]} && len=$((len + 2))
+        [[ $len -gt $max_id ]] && max_id=$len
+        len=${#schedules[$i]}
+        [[ $len -gt $max_sched ]] && max_sched=$len
+    done
 
-            local service_file="$SYSTEMD_USER_DIR/${job}.service"
-            if [[ -f "$service_file" ]]; then
-                local id command flags id_field
-                id=$(jobId "$job")
-                command=$(getJobCommand "$service_file")
-                flags=$(grep "^# SYSTAB_FLAGS=" "$service_file" 2>/dev/null | sed 's/^# SYSTAB_FLAGS=//' || true)
-                if [[ -n "$flags" ]]; then
-                    id_field="$id:$flags"
-                else
-                    id_field="$id:s"
-                fi
-                if isJobEnabled "$job"; then
-                    printf '%s | service | %s\n' "$id_field" "$command"
-                else
-                    printf '# %s | service | %s\n' "$id_field" "$command"
-                fi
-            fi
-        done < <(getManagedServiceJobs)
-    } > "$temp_file"
+    # Print aligned lines
+    for i in "${!id_fields[@]}"; do
+        if ${disabled[$i]}; then
+            printf '# %-*s | %-*s | %s\n' $((max_id - 2)) "${id_fields[$i]}" "$max_sched" "${schedules[$i]}" "${commands[$i]}"
+        else
+            printf '%-*s | %-*s | %s\n' "$max_id" "${id_fields[$i]}" "$max_sched" "${schedules[$i]}" "${commands[$i]}"
+        fi
+    done
+}
+
+# List jobs in crontab-like format to stdout
+listCrontab() {
+    printCrontabContent
+}
+
+# Edit jobs in crontab-like format
+editJobs() {
+    local temp_file orig_file
+    temp_file="${TMPDIR:-/dev/shm}/systab_edit_$$"
+    orig_file="${TMPDIR:-/dev/shm}/systab_orig_$$"
+    # shellcheck disable=SC2064
+    trap "rm -f '$temp_file' '$orig_file'" EXIT
+
+    # Build crontab content
+    printCrontabContent > "$temp_file"
 
     # Save original for diffing
     cp "$temp_file" "$orig_file"
@@ -830,7 +851,7 @@ HEADER
     for id in "${!orig_jobs[@]}"; do all_orig_ids["$id"]=1; done
     for id in "${!orig_commented[@]}"; do all_orig_ids["$id"]=1; done
 
-    local created=0 deleted=0 updated=0 enabled=0 disabled=0 needs_reload=false
+    local created=0 deleted=0 updated=0 enabled=0 n_disabled=0 needs_reload=false
 
     # Deletions: IDs in original (active or commented) but absent from edited entirely
     for id in "${!all_orig_ids[@]}"; do
@@ -902,7 +923,7 @@ HEADER
         if ! $was_commented && $now_commented; then
             disableJob "$jname"
             echo "Disabled: $id"
-            disabled=$((disabled + 1))
+            n_disabled=$((n_disabled + 1))
             needs_reload=true
         elif $was_commented && ! $now_commented; then
             enableJob "$jname"
@@ -973,7 +994,7 @@ HEADER
     fi
 
     echo ""
-    echo "Summary: $created created, $updated updated, $deleted deleted, $enabled enabled, $disabled disabled"
+    echo "Summary: $created created, $updated updated, $deleted deleted, $enabled enabled, $n_disabled disabled"
 }
 
 # Build a job list from opt_jobid (single job) or getManagedUnits (all jobs)
@@ -1182,7 +1203,7 @@ cleanJobs() {
 
 # Parse command-line options
 parseOptions() {
-    while getopts "t:sc:f:n:im:oD:E:eLSCh" opt; do
+    while getopts "t:sc:f:n:im:oD:E:elLSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             s) opt_service=true ;;
@@ -1206,6 +1227,7 @@ parseOptions() {
             D) opt_disable="$OPTARG" ;;
             E) opt_enable="$OPTARG" ;;
             e) opt_edit=true ;;
+            l) opt_print_crontab=true ;;
             L) opt_list=true ;;
             S) opt_status=true ;;
             C) opt_clean=true ;;
@@ -1247,16 +1269,17 @@ parseOptions() {
     [[ -n "$opt_disable" ]] && manage_count=$((manage_count + 1))
     [[ -n "$opt_enable" ]] && manage_count=$((manage_count + 1))
     $opt_edit && manage_count=$((manage_count + 1))
+    $opt_print_crontab && manage_count=$((manage_count + 1))
     $opt_list && manage_count=$((manage_count + 1))
     $opt_status && manage_count=$((manage_count + 1))
     $opt_clean && manage_count=$((manage_count + 1))
 
     if [[ $manage_count -gt 1 ]]; then
-        error "Options -D, -E, -e, -L, -S, and -C are mutually exclusive"
+        error "Options -D, -E, -e, -l, -L, -S, and -C are mutually exclusive"
     fi
 
     if [[ $manage_count -gt 0 ]] && { [[ -n "$opt_time$opt_command$opt_file" ]] || $opt_service; }; then
-        error "Management options -D, -E, -e, -L, -S, and -C cannot be used with job creation options"
+        error "Management options -D, -E, -e, -l, -L, -S, and -C cannot be used with job creation options"
     fi
     
     if [[ -n "$opt_command" && -n "$opt_file" ]]; then
@@ -1287,6 +1310,8 @@ main() {
         toggleJobById "$opt_enable" enable
     elif $opt_edit; then
         editJobs
+    elif $opt_print_crontab; then
+        listCrontab
     elif $opt_list; then
         listLogs
     elif $opt_status; then
