@@ -404,11 +404,45 @@ assert_output "enable already enabled service" "Already enabled:" $SYSTAB -E "$i
 # Edit mode shows service jobs with 'service' in schedule column
 # (mirrors tape: EDITOR=nano systab -e shows "id:s | service | cmd")
 edit_output=$(EDITOR=cat $SYSTAB -e 2>&1 || true)
-if [[ "$edit_output" == *"| service |"* ]]; then
+if [[ "$edit_output" == *"| service"* ]]; then
     pass "edit mode shows service job with 'service' schedule"
 else
     fail "edit mode shows service job with 'service' schedule" "not found in: $edit_output"
 fi
+
+# -l prints crontab format to stdout
+list_output=$($SYSTAB -l 2>&1)
+if [[ "$list_output" == *"| service"* ]]; then
+    pass "-l prints service job with 'service' schedule"
+else
+    fail "-l prints service job with 'service' schedule" "not found in: $list_output"
+fi
+if [[ "$list_output" == *"$id_recurring"* ]]; then
+    pass "-l includes timer job"
+else
+    fail "-l includes timer job" "not found in: $list_output"
+fi
+
+# -l pipe separators are aligned (all first pipes at same column)
+pipe_cols=()
+while IFS= read -r line; do
+    [[ "$line" == *"|"* ]] || continue
+    # skip hint/separator lines (not job entries)
+    [[ "$line" =~ ^# ]] && [[ ! "$line" =~ ^#[[:space:]][0-9a-f]{6} ]] && continue
+    pipe_prefix="${line%%|*}"
+    pipe_cols+=("${#pipe_prefix}")
+done <<< "$list_output"
+if [[ ${#pipe_cols[@]} -gt 1 ]]; then
+    unique_cols=$(printf '%s\n' "${pipe_cols[@]}" | sort -u | wc -l)
+    if [[ "$unique_cols" -eq 1 ]]; then
+        pass "-l pipe separators are aligned"
+    else
+        fail "-l pipe separators are aligned" "first-pipe columns: ${pipe_cols[*]}"
+    fi
+fi
+
+assert_failure "-l and -e are mutually exclusive" $SYSTAB -l -e
+assert_failure "-l cannot be used with job creation options" $SYSTAB -l -t daily -c "echo test"
 
 # Mutually exclusive flags (mirrors tape design: -s conflicts with -t/-i/-m/-o)
 assert_failure "-s and -t are mutually exclusive" $SYSTAB -s -t daily -c "echo test"

@@ -25,6 +25,18 @@ Type "systab -t daily -c '/home/user/backup.sh' -i"
 Enter
 Sleep 2s
 
+# List jobs in crontab format without opening editor
+Hide
+Type "./demo/note.sh 'Listing jobs in crontab format (-l)'"
+Enter
+Sleep 500ms
+Show
+Sleep 1s
+Type "systab -l"
+Sleep 500ms
+Enter
+Sleep 2s
+
 # Open edit mode with EDITOR=nano for visibility
 Hide
 Type "./demo/note.sh 'Opening edit mode — add notifications, create and modify jobs'"
