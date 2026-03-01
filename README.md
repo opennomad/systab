@@ -216,15 +216,19 @@ Management (accept hex ID or name):
   -h                Show help
 ```
 
+## Future feature ideas
+
+- [ ] `-R` flag to restart / reload
+
 ## License
 
 AGPL-3.0-or-later. See [LICENSE](LICENSE).
 
 ## Contributing
 
-The primary repository is hosted on [Forgejo](https://code.opennomad.com/opennomad/systab) with a public mirror on [GitHub](https://github.com/opennomad/systab).
+The primary repository is hosted on [Forgejo](https://code.opennomad.com/opennomad/systab) with a public mirrors on [Codeberg](https://codeberg.org/opennomad/systab) and [GitHub](https://github.com/opennomad/systab).
 
-Contributions (issues and pull requests) are welcome on GitHub.
+Contributions (issues and pull requests) are welcome via both mirrors.
 
 After cloning, enable the pre-commit hook (runs ShellCheck + tests):
 
