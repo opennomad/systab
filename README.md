@@ -167,10 +167,10 @@ systab -C
 `systab -e` opens your editor with a pipe-delimited job list:
 
 ```
-a1b2c3:n=backup | daily | /home/user/backup.sh
-d4e5f6:i | *:0/15 | curl -s https://example.com
+a1b2c3:n=backup                    | daily  | /home/user/backup.sh
+d4e5f6:i                           | *:0/15 | curl -s https://example.com
 g7h8i9:n=weekly-backup,e=user@host | weekly | ~/backup.sh
-# aabbcc | hourly | echo "this job is disabled"
+# aabbcc                           | hourly | echo "this job is disabled"
 ```
 
 - Edit the schedule or command to update a job
