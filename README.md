@@ -89,7 +89,27 @@ Note: `date -d` does not technically like "*in* 5 minutes" or "*at*" between day
 
 ## Usage
 
-### Creating timer jobs
+### Edit mode
+
+`systab -e` opens your editor with a pipe-delimited job list:
+
+```
+a1b2c3:n=backup                    | daily   | /home/user/backup.sh
+d4e5f6:i                           | *:0/15  | curl -s https://example.com
+200816:s,n=syncthing               | service | /usr/bin/syncthing --no-browser
+g7h8i9:n=weekly-backup,e=user@host | weekly  | ~/backup.sh
+# aabbcc                           | hourly  | echo "this job is disabled"
+```
+
+- Edit the schedule or command to update a job
+- Delete a line to remove a job
+- Add a line with `new` as the ID to create a job: `new | every 5 minutes | echo hello`
+- Add a service with `new:s` and `service` as the schedule: `new:s,n=monitor | service | /usr/bin/my-monitor.sh`
+- Comment out a line (`#`) to disable, uncomment to enable
+- Append flags after the ID with `:` — `s` for service, `n=name` for naming, `i` for desktop notification, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:n=backup,i,o,e=user@host`)
+- the formatting is just for us humans and whitespace will be stripped on save
+
+### Creating timer jobs via CLI
 
 ```bash
 # Command string (with optional name)
@@ -161,24 +181,6 @@ systab -E backup
 # Clean up completed one-time jobs
 systab -C
 ```
-
-### Edit mode
-
-`systab -e` opens your editor with a pipe-delimited job list:
-
-```
-a1b2c3:n=backup                    | daily  | /home/user/backup.sh
-d4e5f6:i                           | *:0/15 | curl -s https://example.com
-g7h8i9:n=weekly-backup,e=user@host | weekly | ~/backup.sh
-# aabbcc                           | hourly | echo "this job is disabled"
-```
-
-- Edit the schedule or command to update a job
-- Delete a line to remove a job
-- Add a line with `new` as the ID to create a job: `new | every 5 minutes | echo hello`
-- Add a service with `new:s` and `service` as the schedule: `new:s,n=monitor | service | /usr/bin/my-monitor.sh`
-- Comment out a line (`#`) to disable, uncomment to enable
-- Append flags after the ID with `:` — `s` for service, `n=name` for naming, `i` for desktop notification, `e=addr` for email, `o` for output (default 10 lines), `o=N` for custom count, comma-separated (e.g., `a1b2c3:n=backup,i,o,e=user@host`)
 
 ### Job IDs and names
 
