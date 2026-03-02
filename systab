@@ -23,6 +23,7 @@ opt_clean=false
 opt_status=false
 opt_disable=""
 opt_enable=""
+opt_delete=""
 opt_filter=""
 opt_output=""
 opt_name=""
@@ -48,6 +49,7 @@ Job Creation Options:
 Management Options (accept hex ID or name):
   -D <id|name>      Disable a job
   -E <id|name>      Enable a disabled job
+  -X <id|name>      Delete a job (stop, disable, and remove unit files)
   -e                Edit jobs in crontab-like format
   -l                Print jobs in crontab-like format to stdout
   -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
@@ -88,6 +90,10 @@ EXAMPLES:
   # Disable and enable a job (by hex ID or name)
   $SCRIPT_NAME -D <id>
   $SCRIPT_NAME -E backup
+
+  # Delete a job permanently
+  $SCRIPT_NAME -X <id>
+  $SCRIPT_NAME -X backup
 
   # View logs for backup jobs
   $SCRIPT_NAME -L backup
@@ -331,6 +337,20 @@ toggleJobById() {
         enableJob "$_job_name"
         echo "Enabled: $label"
     fi
+}
+
+# Delete a job (stop, disable, remove unit files) by hex ID or name
+deleteJob() {
+    local input="$1"
+    validateJobId "$input"
+    local id="$_resolved_id"
+    local name
+    name=$(getJobName "$SYSTEMD_USER_DIR/${_job_name}.service")
+    local label
+    label=$(formatJobId "$id" "$name")
+    removeJob "$_job_name"
+    systemctl --user daemon-reload
+    echo "Deleted: $label"
 }
 
 # Get all managed unit files of a given type (service or timer)
@@ -1185,7 +1205,7 @@ cleanJobs() {
 
 # Parse command-line options
 parseOptions() {
-    while getopts "t:sc:f:n:im:oD:E:elLSCh" opt; do
+    while getopts "t:sc:f:n:im:oD:E:X:elLSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             s) opt_service=true ;;
@@ -1208,6 +1228,7 @@ parseOptions() {
                 fi ;;
             D) opt_disable="$OPTARG" ;;
             E) opt_enable="$OPTARG" ;;
+            X) opt_delete="$OPTARG" ;;
             e) opt_edit=true ;;
             l) opt_print_crontab=true ;;
             L) opt_list=true ;;
@@ -1250,6 +1271,7 @@ parseOptions() {
     local manage_count=0
     [[ -n "$opt_disable" ]] && manage_count=$((manage_count + 1))
     [[ -n "$opt_enable" ]] && manage_count=$((manage_count + 1))
+    [[ -n "$opt_delete" ]] && manage_count=$((manage_count + 1))
     $opt_edit && manage_count=$((manage_count + 1))
     $opt_print_crontab && manage_count=$((manage_count + 1))
     $opt_list && manage_count=$((manage_count + 1))
@@ -1257,11 +1279,11 @@ parseOptions() {
     $opt_clean && manage_count=$((manage_count + 1))
 
     if [[ $manage_count -gt 1 ]]; then
-        error "Options -D, -E, -e, -l, -L, -S, and -C are mutually exclusive"
+        error "Options -D, -E, -X, -e, -l, -L, -S, and -C are mutually exclusive"
     fi
 
     if [[ $manage_count -gt 0 ]] && { [[ -n "$opt_time$opt_command$opt_file" ]] || $opt_service; }; then
-        error "Management options -D, -E, -e, -l, -L, -S, and -C cannot be used with job creation options"
+        error "Management options -D, -E, -X, -e, -l, -L, -S, and -C cannot be used with job creation options"
     fi
     
     if [[ -n "$opt_command" && -n "$opt_file" ]]; then
@@ -1290,6 +1312,8 @@ main() {
         toggleJobById "$opt_disable" disable
     elif [[ -n "$opt_enable" ]]; then
         toggleJobById "$opt_enable" enable
+    elif [[ -n "$opt_delete" ]]; then
+        deleteJob "$opt_delete"
     elif $opt_edit; then
         editJobs
     elif $opt_print_crontab; then

@@ -189,6 +189,58 @@ assert_output "enable job" "Enabled:" $SYSTAB -E "$id_recurring"
 assert_output "enable already enabled" "Already enabled:" $SYSTAB -E "$id_recurring"
 
 # ============================================================
+# Delete (-X)
+# ============================================================
+
+echo ""
+echo "${BOLD}--- Delete (-X) ---${RESET}"
+
+assert_output "create timer job for deletion" "Job created:" $SYSTAB -t "every 30 minutes" -c "echo delete_test"
+extract_id; id_del=$_extracted_id
+
+assert_output "delete timer job by ID" "Deleted:" $SYSTAB -X "$id_del"
+assert_last_output_contains "delete output contains job ID" "$id_del"
+
+if [[ ! -f "$SYSTEMD_USER_DIR/systab_${id_del}.service" ]]; then
+    pass "service file removed after delete"
+else
+    fail "service file removed after delete" "file still exists"
+fi
+if [[ ! -f "$SYSTEMD_USER_DIR/systab_${id_del}.timer" ]]; then
+    pass "timer file removed after delete"
+else
+    fail "timer file removed after delete" "file still exists"
+fi
+
+assert_output "create named job for deletion" "Job created:" $SYSTAB -t "every 30 minutes" -c "echo named_delete_test" -n deltarget
+extract_id; id_del_named=$_extracted_id
+
+assert_output "delete named job by name" "Deleted:" $SYSTAB -X deltarget
+assert_last_output_contains "delete-by-name output shows name" "(deltarget)"
+
+if [[ ! -f "$SYSTEMD_USER_DIR/systab_${id_del_named}.service" ]]; then
+    pass "named job service file removed after delete"
+else
+    fail "named job service file removed after delete" "file still exists"
+fi
+
+assert_output "create service job for deletion" "Service created:" $SYSTAB -s -c "sleep 3600"
+extract_id; id_del_svc=$_extracted_id
+
+assert_output "delete service job by ID" "Deleted:" $SYSTAB -X "$id_del_svc"
+
+if [[ ! -f "$SYSTEMD_USER_DIR/systab_${id_del_svc}.service" ]]; then
+    pass "service-only job file removed after delete"
+else
+    fail "service-only job file removed after delete" "file still exists"
+fi
+
+assert_failure "delete nonexistent job fails" $SYSTAB -X "zzzzzz"
+assert_failure "-X and -D are mutually exclusive" $SYSTAB -X "$id_recurring" -D "$id_recurring"
+assert_failure "-X and -E are mutually exclusive" $SYSTAB -X "$id_recurring" -E "$id_recurring"
+assert_failure "-X cannot be combined with job creation" $SYSTAB -X "$id_recurring" -t daily -c "echo test"
+
+# ============================================================
 # Notifications
 # ============================================================
 

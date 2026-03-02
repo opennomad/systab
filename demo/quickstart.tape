@@ -1,5 +1,5 @@
 # systab — Quick Start
-# Creates a few jobs, checks status, views logs, then cleans up.
+# Create a timer, create a service, then disable the service via edit mode.
 
 Output demo/quickstart.gif
 Set Shell bash
@@ -11,113 +11,87 @@ Set TypingSpeed 50ms
 
 Sleep 1s
 
-# Create a recurring job
+# Clean up any pre-existing jobs with names used in this demo
 Hide
-Type "./demo/note.sh 'Creating a recurring health check (every 5 minutes)'"
+Type "for n in healthcheck_home monitor_home; do systab -X \"$n\" 2>/dev/null || true; done"
+Enter
+Sleep 1s
+Show
+
+# Create a recurring timer
+Hide
+Type "./demo/note.sh 'Create a recurring timer'"
 Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -t 'every 5 minutes' -n healthcheck -c 'echo health check OK'"
+Type "systab -t 'every 5 minutes' -n healthcheck_home -c 'echo health check OK'"
 Sleep 500ms
 Enter
 Sleep 2s
 
-# Create a one-time job
+# Create a persistent service
 Hide
-Type "./demo/note.sh 'Creating a one-time reminder (30 minutes from now)'"
+Type "./demo/note.sh 'Create a persistent service'"
 Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -t 'in 30 minutes' -c 'echo reminder: meeting soon'"
+Type "systab -s -n monitor_home -c 'sleep 3600'"
 Sleep 500ms
 Enter
 Sleep 2s
 
-# Check status of all jobs
+# Both visible in status
 Hide
-Type "./demo/note.sh 'Checking status of all jobs'"
+Type "./demo/note.sh 'Both jobs visible in status'"
 Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -S | less"
+Type "systab -S"
 Sleep 500ms
 Enter
 Sleep 2s
-Type "/Job:"
+
+# Open edit mode and disable the service by commenting out its line
+Hide
+Type "./demo/note.sh 'Edit mode — disable the monitor service'"
+Enter
+Sleep 500ms
+Show
+Sleep 1s
+Type "EDITOR=nano systab -e"
+Sleep 500ms
 Enter
 Sleep 3s
-Type "q"
-Sleep 1s
 
-# View logs
-Hide
-Type "./demo/note.sh 'Viewing job logs'"
-Enter
+# In nano: search for "monitor_home", jump to start of that line, prefix with '#'
+Ctrl+W
 Sleep 500ms
-Show
+Type "monitor_home"
+Enter
 Sleep 1s
-Type "systab -L | less"
+Ctrl+A
+Sleep 500ms
+Type "#"
+Sleep 500ms
+
+Ctrl+O
 Sleep 500ms
 Enter
-Sleep 2s
-Type "/Logs for"
-Enter
+Sleep 500ms
+Ctrl+X
 Sleep 3s
-Type "q"
-Sleep 1s
 
-# Disable a job (uses the first job ID from status)
+# Verify the service is now disabled
 Hide
-Type "./demo/note.sh 'Disabling a job'"
+Type "./demo/note.sh 'Monitor service is now disabled'"
 Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -D healthcheck"
-Sleep 500ms
-Enter
-Sleep 2s
-
-# Show it's disabled
-Hide
-Type "./demo/note.sh 'Verifying job is disabled'"
-Enter
-Sleep 500ms
-Show
-Sleep 1s
-Type "systab -S | less"
-Sleep 500ms
-Enter
-Sleep 2s
-Type "/Disabled"
-Enter
-Sleep 3s
-Type "q"
-Sleep 1s
-
-# Enable it
-Hide
-Type "./demo/note.sh 'Enabling the disabled job'"
-Enter
-Sleep 500ms
-Show
-Sleep 1s
-Type "systab -E healthcheck"
-Sleep 500ms
-Enter
-Sleep 2s
-
-# Clean up completed one-time jobs
-Hide
-Type "./demo/note.sh 'Cleaning up completed one-time jobs'"
-Enter
-Sleep 500ms
-Show
-Sleep 1s
-Type "systab -C"
+Type "systab -S"
 Sleep 500ms
 Enter
 Sleep 2s

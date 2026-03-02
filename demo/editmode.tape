@@ -1,107 +1,39 @@
-# systab — Edit Mode with Notification Flags
-# Demonstrates the crontab-style editor with :flags syntax.
+# systab — Edit Mode Screenshot
+# Creates representative jobs, opens edit mode, captures a screenshot.
 
 Output demo/editmode.gif
 Set Shell bash
 Set Width 1200
-Set Height 600
+Set Height 500
 Set FontSize 16
 
-Set TypingSpeed 50ms
+Set TypingSpeed 0
 
-Sleep 1s
-
-# First create some jobs to edit
+# Clean up any pre-existing jobs with names used in this demo
 Hide
-Type "./demo/note.sh 'Creating some jobs to work with'"
+Type "for n in healthcheck_home backup_home syncthing_home cleanup_home; do systab -X \"$n\" 2>/dev/null || true; done"
 Enter
-Sleep 500ms
-Show
 Sleep 1s
-Type "systab -t 'every 5 minutes' -c 'echo ping'"
+
+# Create representative jobs silently
+Type "systab -t 'every 5 minutes' -n healthcheck_home -c 'curl -s https://example.com/health' -i"
 Enter
 Sleep 2s
-Type "systab -t daily -c '/home/user/backup.sh' -i"
+Type "systab -t 'daily' -n backup_home -c '/home/user/backup.sh' -i"
 Enter
 Sleep 2s
-
-# List jobs in crontab format without opening editor
-Hide
-Type "./demo/note.sh 'Listing jobs in crontab format (-l)'"
-Enter
-Sleep 500ms
-Show
-Sleep 1s
-Type "systab -l"
-Sleep 500ms
+Type "systab -s -n syncthing_home -c '/usr/bin/syncthing --no-browser'"
 Enter
 Sleep 2s
-
-# Open edit mode with EDITOR=nano for visibility
-Hide
-Type "./demo/note.sh 'Opening edit mode — add notifications, create and modify jobs'"
+Type "systab -t 'weekly' -n cleanup_home -c 'find /tmp -mtime +7 -delete'"
 Enter
-Sleep 500ms
+Sleep 2s
 Show
-Sleep 1s
+
 Type "EDITOR=nano systab -e"
-Sleep 500ms
 Enter
 Sleep 3s
 
-# In nano: navigate to the end of the file
-# Ctrl+V = page down in nano, then Down to reach last line
-Ctrl+V
-Sleep 500ms
-Down 5
-Sleep 500ms
-
-# Add a new job line with notification flags
-Type "new:n=health,i,e=admin@example.com | hourly | curl -s https://example.com/health"
-Sleep 1s
-Enter
+Screenshot demo/editmode.png
 
 Sleep 1s
-
-# Save and exit nano
-Ctrl+O
-Sleep 500ms
-Enter
-Sleep 500ms
-Ctrl+X
-Sleep 3s
-
-# Show the result
-Hide
-Type "./demo/note.sh 'Changes applied — checking status'"
-Enter
-Sleep 500ms
-Show
-Sleep 1s
-Type "systab -S | less"
-Sleep 500ms
-Enter
-Sleep 2s
-Type "/Job:"
-Enter
-Sleep 3s
-Type "q"
-Sleep 1s
-
-# Re-open edit mode to show flags are persisted
-Hide
-Type "./demo/note.sh 'Re-opening edit mode — flags are persisted'"
-Enter
-Sleep 500ms
-Show
-Sleep 1s
-Type "EDITOR=nano systab -e"
-Sleep 500ms
-Enter
-Sleep 3s
-
-# Just view and exit without changes
-Ctrl+X
-Sleep 2s
-
-Sleep 2s

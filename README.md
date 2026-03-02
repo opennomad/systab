@@ -15,18 +15,16 @@ Because you want to use systemd, but miss the ease of ~crontab~`systab -e`!
 - 📋 access the logs of any job
 - 💪 enable and disable timers and services
 
+<p align="center"><img src="demo/editmode.png" alt="Edit mode"></p>
+
 <table>
 <tr>
-<td width="25%"><img src="demo/quickstart.gif" alt="Quick start demo"></td>
-<td width="25%"><img src="demo/editmode.gif" alt="Edit mode demo"></td>
-<td width="25%"><img src="demo/notifications.gif" alt="Notifications demo"></td>
-<td width="25%"><img src="demo/services.gif" alt="Services demo"></td>
+<td width="50%"><img src="demo/quickstart.gif" alt="Quick start demo"></td>
+<td width="50%"><img src="demo/all-features.gif" alt="All features demo"></td>
 </tr>
 <tr>
 <td align="center"><b>Quick start</b></td>
-<td align="center"><b>Edit mode</b></td>
-<td align="center"><b>Notifications</b></td>
-<td align="center"><b>Services</b></td>
+<td align="center"><b>All features</b></td>
 </tr>
 </table>
 
@@ -184,7 +182,7 @@ systab -C
 
 ### Job IDs and names
 
-Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. You can also assign a human-readable name with `-n` at creation time. Names can be used interchangeably with hex IDs in `-D`, `-E`, `-S`, and `-L`. Names must be unique and cannot contain whitespace, pipes, or colons.
+Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. You can also assign a human-readable name with `-n` at creation time. Names can be used interchangeably with hex IDs in `-D`, `-E`, `-X`, `-S`, and `-L`. Names must be unique and cannot contain whitespace, pipes, or colons.
 
 ## How it works
 
@@ -210,6 +208,7 @@ Job Creation:
 Management (accept hex ID or name):
   -D <id|name>      Disable a job
   -E <id|name>      Enable a disabled job
+  -X <id|name>      Delete a job (stop, disable, and remove unit files)
   -e                Edit jobs in crontab-like format
   -l                Print jobs in crontab-like format to stdout
   -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
@@ -221,6 +220,7 @@ Management (accept hex ID or name):
 ## Future feature ideas
 
 - [ ] `-R` flag to restart / reload
+- [x] `-X` flag to delete
 
 ## License
 

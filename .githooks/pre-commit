@@ -27,11 +27,24 @@ fi
 echo "Running tests..."
 if output=$(./test.sh 2>&1); then
     echo "$output"
-    count=$(grep -oP '\d+ passed' <<< "$output" | tail -1)
-    write_badge "${count:-passing}" "brightgreen"
+    test_count=$(grep -oP '\d+(?= passed)' <<< "$output" | tail -1)
 else
     echo "$output"
     write_badge "failing" "red"
     echo "Tests failed — commit blocked."
     exit 1
 fi
+
+echo "Running demo tape tests..."
+if tape_output=$(./demo/test-tapes.sh 2>&1); then
+    echo "$tape_output"
+    tape_count=$(grep -oP '\d+(?= passed)' <<< "$tape_output" | tail -1)
+else
+    echo "$tape_output"
+    write_badge "failing" "red"
+    echo "Demo tape tests failed — commit blocked."
+    exit 1
+fi
+
+total_count=$(( ${test_count:-0} + ${tape_count:-0} ))
+write_badge "${total_count} passed" "brightgreen"
