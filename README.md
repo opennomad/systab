@@ -239,6 +239,15 @@ After cloning, enable the pre-commit hook (runs ShellCheck + tests):
 git config core.hooksPath .githooks
 ```
 
+Common tasks via [`just`](https://github.com/casey/just):
+
+```bash
+just check    # lint + unit tests + tape tests
+just test     # unit tests only
+just lint     # ShellCheck only
+just record   # re-record demo GIFs with VHS
+```
+
 
 ## FAQ
 
