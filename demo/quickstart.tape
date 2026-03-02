@@ -1,5 +1,5 @@
 # systab — Quick Start
-# Create a timer, create a service, then disable the service via edit mode.
+# Create a timer, create a service, then use edit mode to add a new job.
 
 Output demo/quickstart.gif
 Set Shell bash
@@ -13,7 +13,7 @@ Sleep 1s
 
 # Clean up any pre-existing jobs with names used in this demo
 Hide
-Type "for n in healthcheck_home monitor_home; do systab -X \"$n\" 2>/dev/null || true; done"
+Type "for n in healthcheck_home monitor_home diskcheck_home; do systab -X \"$n\" 2>/dev/null || true; done"
 Enter
 Sleep 1s
 Show
@@ -25,7 +25,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -t 'every 5 minutes' -n healthcheck_home -c 'echo health check OK'"
+Type "systab -t 'every 5 minutes' -n healthcheck_home -c 'uptime'"
 Sleep 500ms
 Enter
 Sleep 2s
@@ -37,7 +37,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -s -n monitor_home -c 'sleep 3600'"
+Type "systab -s -n monitor_home -c 'ping -c 1 localhost'"
 Sleep 500ms
 Enter
 Sleep 2s
@@ -54,9 +54,9 @@ Sleep 500ms
 Enter
 Sleep 2s
 
-# Open edit mode and disable the service by commenting out its line
+# Open edit mode: screenshot then add a new job
 Hide
-Type "./demo/note.sh 'Edit mode — disable the monitor service'"
+Type "./demo/note.sh 'Edit mode — add a new job'"
 Enter
 Sleep 500ms
 Show
@@ -66,15 +66,15 @@ Sleep 500ms
 Enter
 Sleep 3s
 
-# In nano: search for "monitor_home", jump to start of that line, prefix with '#'
-Ctrl+W
+Screenshot demo/editmode.png
+
+# Navigate to end of file in nano and add a new job
+Ctrl+V
 Sleep 500ms
-Type "monitor_home"
+Down 5
+Sleep 500ms
+Type "new:n=diskcheck_home | daily | df -h"
 Enter
-Sleep 1s
-Ctrl+A
-Sleep 500ms
-Type "#"
 Sleep 500ms
 
 Ctrl+O
@@ -84,9 +84,9 @@ Sleep 500ms
 Ctrl+X
 Sleep 3s
 
-# Verify the service is now disabled
+# Show updated status
 Hide
-Type "./demo/note.sh 'Monitor service is now disabled'"
+Type "./demo/note.sh 'Status after edit — new job added'"
 Enter
 Sleep 500ms
 Show

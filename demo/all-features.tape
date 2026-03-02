@@ -27,18 +27,18 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -t 'every 5 minutes' -n healthcheck_home -c 'echo health check OK'"
+Type "systab -t 'every 5 minutes' -n healthcheck_home -c 'uptime'"
 Sleep 500ms
 Enter
 Sleep 2s
 
 Hide
-Type "./demo/note.sh 'One-time reminder in 30 minutes'"
+Type "./demo/note.sh 'One-time reminder with desktop notification'"
 Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -t 'in 30 minutes' -c 'echo reminder: meeting soon'"
+Type "systab -t 'in 30 minutes' -c 'echo reminder: meeting soon' -i"
 Sleep 500ms
 Enter
 Sleep 2s
@@ -49,7 +49,7 @@ Enter
 Sleep 500ms
 Show
 Sleep 1s
-Type "systab -s -n monitor_home -c 'sleep 3600'"
+Type "systab -s -n monitor_home -c 'ping -c 1 localhost'"
 Sleep 500ms
 Enter
 Sleep 2s
