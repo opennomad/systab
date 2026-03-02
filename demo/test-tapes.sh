@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-tapes.sh — Verify all systab commands in VHS tape files run correctly.
-# Greps Type "systab ..." and Type "EDITOR=... systab ..." lines from *.tape
-# files and runs them in order per tape, reporting pass/fail.
+# Reads each tape line-by-line, tracking Hide/Show blocks. Only runs
+# Type "systab ..." and Type "EDITOR=..." lines that are in visible (Show) blocks.
 #
 # Run from the project root: ./demo/test-tapes.sh
 
@@ -83,10 +83,26 @@ run_tape() {
   echo ""
   echo "${BOLD}=== $tape_name ===${RESET}"
 
-  cleanup_tape_jobs  # each tape starts with a clean slate
+  cleanup_tape_jobs  # clean up IDs from previous tape
 
-  local raw cmd output exit_code
-  while IFS= read -r raw; do
+  # Pre-clean named jobs from this tape to handle leftovers from failed runs
+  local name
+  while IFS= read -r name; do
+    systab -X "$name" 2>/dev/null || true
+  done < <(grep -E '^Type "systab .*-n ' "$tape" | grep -oP '(?<=-n )\w+')
+
+  local line raw cmd output exit_code in_hide=false
+  while IFS= read -r line; do
+    # Track Hide/Show blocks — skip commands in hidden sections
+    [[ "$line" == "Hide" ]] && { in_hide=true;  continue; }
+    [[ "$line" == "Show" ]] && { in_hide=false; continue; }
+    $in_hide && continue
+
+    # Only process visible Type lines with systab or EDITOR= commands
+    [[ "$line" == 'Type "systab '* ]] || [[ "$line" == 'Type "EDITOR='* ]] || continue
+
+    raw="${line#Type \"}"
+    raw="${raw%\"}"
     cmd=$(normalize "$raw")
     exit_code=0
 
@@ -104,7 +120,7 @@ run_tape() {
     else
       fail "$tape_name: $raw" "exit $exit_code: ${output:0:120}"
     fi
-  done < <(grep -E '^Type "(systab |EDITOR=)' "$tape" | sed 's/^Type "//; s/"$//')
+  done < "$tape"
 }
 
 echo "${BOLD}Testing systab commands from VHS tape files...${RESET}"

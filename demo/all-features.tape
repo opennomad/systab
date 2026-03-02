@@ -14,7 +14,7 @@ Sleep 1s
 
 # Clean up any pre-existing jobs with names used in this demo
 Hide
-Type "for n in healthcheck_home monitor_home backup_home health2_home; do systab -X \"$n\" 2>/dev/null || true; done"
+Type "systab -X healthcheck_home 2>/dev/null; systab -X monitor_home 2>/dev/null; systab -X backup_home 2>/dev/null; systab -X health2_home 2>/dev/null; true"
 Enter
 Sleep 1s
 Show
