@@ -109,6 +109,19 @@ Sleep 500ms
 Enter
 Sleep 2s
 
+# ── Restart ───────────────────────────────────────────────────
+
+Hide
+Type "./demo/note.sh 'Restart a job — resets the timer countdown'"
+Enter
+Sleep 500ms
+Show
+Sleep 1s
+Type "systab -R healthcheck_home"
+Sleep 500ms
+Enter
+Sleep 2s
+
 # ── Notifications ─────────────────────────────────────────────
 
 Hide

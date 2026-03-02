@@ -182,7 +182,7 @@ systab -C
 
 ### Job IDs and names
 
-Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. You can also assign a human-readable name with `-n` at creation time. Names can be used interchangeably with hex IDs in `-D`, `-E`, `-X`, `-S`, and `-L`. Names must be unique and cannot contain whitespace, pipes, or colons.
+Each job gets a 6-character hex ID (e.g., `a1b2c3`) displayed on creation and in status output. You can also assign a human-readable name with `-n` at creation time. Names can be used interchangeably with hex IDs in `-D`, `-E`, `-X`, `-R`, `-S`, and `-L`. Names must be unique and cannot contain whitespace, pipes, or colons.
 
 ## How it works
 
@@ -209,6 +209,7 @@ Management (accept hex ID or name):
   -D <id|name>      Disable a job
   -E <id|name>      Enable a disabled job
   -X <id|name>      Delete a job (stop, disable, and remove unit files)
+  -R <id|name>      Restart a job (resets timer countdown / restarts service process)
   -e                Edit jobs in crontab-like format
   -l                Print jobs in crontab-like format to stdout
   -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
@@ -219,7 +220,7 @@ Management (accept hex ID or name):
 
 ## Future feature ideas
 
-- [ ] `-R` flag to restart / reload
+- [x] `-R` flag to restart / reload
 - [x] `-X` flag to delete
 
 ## License

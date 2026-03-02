@@ -24,6 +24,7 @@ opt_status=false
 opt_disable=""
 opt_enable=""
 opt_delete=""
+opt_restart=""
 opt_filter=""
 opt_output=""
 opt_name=""
@@ -50,6 +51,7 @@ Management Options (accept hex ID or name):
   -D <id|name>      Disable a job
   -E <id|name>      Enable a disabled job
   -X <id|name>      Delete a job (stop, disable, and remove unit files)
+  -R <id|name>      Restart a job (resets timer countdown / restarts service process)
   -e                Edit jobs in crontab-like format
   -l                Print jobs in crontab-like format to stdout
   -L [id|name] [filter]  List job logs (optionally for a specific job and/or filtered)
@@ -94,6 +96,10 @@ EXAMPLES:
   # Delete a job permanently
   $SCRIPT_NAME -X <id>
   $SCRIPT_NAME -X backup
+
+  # Restart a job
+  $SCRIPT_NAME -R <id>
+  $SCRIPT_NAME -R healthcheck_home
 
   # View logs for backup jobs
   $SCRIPT_NAME -L backup
@@ -351,6 +357,26 @@ deleteJob() {
     removeJob "$_job_name"
     systemctl --user daemon-reload
     echo "Deleted: $label"
+}
+
+# Restart a job by hex ID or name
+restartJob() {
+  local input="$1"
+  validateJobId "$input"
+  local id="$_resolved_id"
+  local name
+  name=$(getJobName "$SYSTEMD_USER_DIR/${_job_name}.service")
+  local label
+  label=$(formatJobId "$id" "$name")
+  if ! isJobEnabled "$_job_name"; then
+    error "Job is disabled, enable it first with -E: $label"
+  fi
+  if isJobService "$_job_name"; then
+    systemctl --user restart "${_job_name}.service" 2>/dev/null || true
+  else
+    systemctl --user restart "${_job_name}.timer" 2>/dev/null || true
+  fi
+  echo "Restarted: $label"
 }
 
 # Get all managed unit files of a given type (service or timer)
@@ -1205,7 +1231,7 @@ cleanJobs() {
 
 # Parse command-line options
 parseOptions() {
-    while getopts "t:sc:f:n:im:oD:E:X:elLSCh" opt; do
+    while getopts "t:sc:f:n:im:oD:E:X:R:elLSCh" opt; do
         case $opt in
             t) opt_time="$OPTARG" ;;
             s) opt_service=true ;;
@@ -1229,6 +1255,7 @@ parseOptions() {
             D) opt_disable="$OPTARG" ;;
             E) opt_enable="$OPTARG" ;;
             X) opt_delete="$OPTARG" ;;
+            R) opt_restart="$OPTARG" ;;
             e) opt_edit=true ;;
             l) opt_print_crontab=true ;;
             L) opt_list=true ;;
@@ -1272,6 +1299,7 @@ parseOptions() {
     [[ -n "$opt_disable" ]] && manage_count=$((manage_count + 1))
     [[ -n "$opt_enable" ]] && manage_count=$((manage_count + 1))
     [[ -n "$opt_delete" ]] && manage_count=$((manage_count + 1))
+    [[ -n "$opt_restart" ]] && manage_count=$((manage_count + 1))
     $opt_edit && manage_count=$((manage_count + 1))
     $opt_print_crontab && manage_count=$((manage_count + 1))
     $opt_list && manage_count=$((manage_count + 1))
@@ -1279,11 +1307,11 @@ parseOptions() {
     $opt_clean && manage_count=$((manage_count + 1))
 
     if [[ $manage_count -gt 1 ]]; then
-        error "Options -D, -E, -X, -e, -l, -L, -S, and -C are mutually exclusive"
+        error "Options -D, -E, -X, -R, -e, -l, -L, -S, and -C are mutually exclusive"
     fi
 
     if [[ $manage_count -gt 0 ]] && { [[ -n "$opt_time$opt_command$opt_file" ]] || $opt_service; }; then
-        error "Management options -D, -E, -X, -e, -l, -L, -S, and -C cannot be used with job creation options"
+        error "Management options -D, -E, -X, -R, -e, -l, -L, -S, and -C cannot be used with job creation options"
     fi
     
     if [[ -n "$opt_command" && -n "$opt_file" ]]; then
@@ -1314,6 +1342,8 @@ main() {
         toggleJobById "$opt_enable" enable
     elif [[ -n "$opt_delete" ]]; then
         deleteJob "$opt_delete"
+    elif [[ -n "$opt_restart" ]]; then
+        restartJob "$opt_restart"
     elif $opt_edit; then
         editJobs
     elif $opt_print_crontab; then

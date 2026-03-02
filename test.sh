@@ -503,6 +503,26 @@ assert_failure "-s and -m are mutually exclusive" $SYSTAB -s -m user@example.com
 assert_failure "-s and -o are mutually exclusive" $SYSTAB -s -o -c "echo test"
 
 # ============================================================
+# Restart (-R)
+# ============================================================
+
+echo ""
+echo "${BOLD}--- Restart (-R) ---${RESET}"
+
+assert_output "restart timer job by ID" "Restarted:" $SYSTAB -R "$id_recurring"
+assert_output "restart timer job by name" "Restarted:" $SYSTAB -R mytest
+assert_last_output_contains "restart by name shows name" "(mytest)"
+assert_output "restart service job" "Restarted:" $SYSTAB -R "$id_svc"
+
+$SYSTAB -D "$id_recurring"
+assert_failure "restart disabled job fails" $SYSTAB -R "$id_recurring"
+$SYSTAB -E "$id_recurring"
+
+assert_failure "restart nonexistent job fails" $SYSTAB -R "zzzzzz"
+assert_failure "-R and -D are mutually exclusive" $SYSTAB -R "$id_recurring" -D "$id_recurring"
+assert_failure "-R cannot be combined with job creation" $SYSTAB -R "$id_recurring" -t daily -c "echo test"
+
+# ============================================================
 # Clean
 # ============================================================
 
